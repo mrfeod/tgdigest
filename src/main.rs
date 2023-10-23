@@ -15,6 +15,38 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const SESSION_FILE: &str = "dialogs.session";
 
+const HTML_STYLE: &str = r#"
+    @import url("https://fonts.googleapis.com/css?family=Tenor+Sans&display=swap");
+    a:link {
+        color: black;
+        background-color: transparent;
+        text-decoration: none;
+    }
+    a:visited {
+        color: black;
+        background-color: transparent;
+        text-decoration: none;
+    }
+    div {
+        width: 500px;
+        max-width: 500px;
+        border:3px hidden;
+    }
+    * {
+        font-family: Tenor Sans;
+    }"#;
+
+const HTML_HEADER: &str = "<h1><a href=digest.html>Айти Тудэй Дайджест</a></h1>";
+
+fn widget(post_id: i32) -> String {
+    format!(
+        "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
+        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
+        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
+        post_id
+    )
+}
+
 fn prompt(message: &str) -> Result<String> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
@@ -99,6 +131,7 @@ async fn async_main() -> Result<()> {
     let current_date = Local::now().naive_utc();
     println!("Now {current_date}");
 
+    #[derive(Copy, Clone)]
     pub struct Post {
         date: NaiveDateTime,
         id: i32,
@@ -140,216 +173,79 @@ async fn async_main() -> Result<()> {
     }
 
     posts.partial_sort(3, |a, b| b.replies.cmp(&a.replies));
-    let replies: [i32; 3] = [posts[0].id, posts[1].id, posts[2].id];
-    println!("Top 3 by comments:");
-    println!(
-        "\t1. {}: {}\t({})",
-        posts[0].id, posts[0].replies, posts[0].date
-    );
-    println!(
-        "\t2. {}: {}\t({})",
-        posts[1].id, posts[1].replies, posts[1].date
-    );
-    println!(
-        "\t3. {}: {}\t({})",
-        posts[2].id, posts[2].replies, posts[2].date
-    );
-    println!("");
+    let replies = vec![posts[0], posts[1], posts[2]];
 
     posts.partial_sort(3, |a, b| b.reactions.cmp(&a.reactions));
-    let reactions: [i32; 3] = [posts[0].id, posts[1].id, posts[2].id];
-    println!("Top 3 by reactions:");
-    println!(
-        "\t1. {}: {}\t({})",
-        posts[0].id, posts[0].reactions, posts[0].date
-    );
-    println!(
-        "\t2. {}: {}\t({})",
-        posts[1].id, posts[1].reactions, posts[1].date
-    );
-    println!(
-        "\t3. {}: {}\t({})",
-        posts[2].id, posts[2].reactions, posts[2].date
-    );
-    println!("");
+    let reactions = vec![posts[0], posts[1], posts[2]];
 
     posts.partial_sort(3, |a, b| b.forwards.cmp(&a.forwards));
-    let forwards: [i32; 3] = [posts[0].id, posts[1].id, posts[2].id];
-    println!("Top 3 by forwards:");
-    println!(
-        "\t1. {}: {}\t({})",
-        posts[0].id, posts[0].forwards, posts[0].date
-    );
-    println!(
-        "\t2. {}: {}\t({})",
-        posts[1].id, posts[1].forwards, posts[1].date
-    );
-    println!(
-        "\t3. {}: {}\t({})",
-        posts[2].id, posts[2].forwards, posts[2].date
-    );
-    println!("");
+    let forwards = vec![posts[0], posts[1], posts[2]];
 
     posts.partial_sort(3, |a, b| b.views.cmp(&a.views));
-    let views: [i32; 3] = [posts[0].id, posts[1].id, posts[2].id];
+    let views = vec![posts[0], posts[1], posts[2]];
+
+    println!("Top 3 by comments:");
+    for (pos, e) in replies.iter().enumerate() {
+        println!("\t{}. {}: {}\t({})", pos, e.id, e.reactions, e.date);
+    }
+    println!("");
+    println!("Top 3 by reactions:");
+    for (pos, e) in reactions.iter().enumerate() {
+        println!("\t{}. {}: {}\t({})", pos, e.id, e.reactions, e.date);
+    }
+    println!("");
+    println!("Top 3 by forwards:");
+    for (pos, e) in forwards.iter().enumerate() {
+        println!("\t{}. {}: {}\t({})", pos, e.id, e.reactions, e.date);
+    }
+    println!("");
     println!("Top 3 by views:");
-    println!(
-        "\t1. {}: {}\t({})",
-        posts[0].id, posts[0].views, posts[0].date
-    );
-    println!(
-        "\t2. {}: {}\t({})",
-        posts[1].id, posts[1].views, posts[1].date
-    );
-    println!(
-        "\t3. {}: {}\t({})",
-        posts[2].id, posts[2].views, posts[2].date
-    );
+    for (pos, e) in views.iter().enumerate() {
+        println!("\t{}. {}: {}\t({})", pos, e.id, e.reactions, e.date);
+    }
     println!("");
 
-    let style = r#"
-        @import url("https://fonts.googleapis.com/css?family=Tenor+Sans&display=swap");
-        a:link {
-            color: black;
-            background-color: transparent;
-            text-decoration: none;
-        }
-        a:visited {
-            color: black;
-            background-color: transparent;
-            text-decoration: none;
-        }
-        div {
-            width: 500px;
-            max-width: 500px;
-            border:3px hidden;
-        }
-        * {
-            font-family: Tenor Sans;
-        }"#;
+    fn generate_page<F>(posts: &Vec<Post>, header: &str, icon: &str, count: F) -> String
+    where
+        F: Fn(&Post) -> i32,
+    {
+        HtmlPage::new()
+            .with_style(HTML_STYLE)
+            .with_title("Айти Тудэй Дайджест")
+            .with_raw(HTML_HEADER)
+            .with_header(2, format!("{header} {icon}"))
+            .with_header(3, format!("1. {icon}{}", count(&posts[0])))
+            .with_raw(widget(posts[0].id))
+            .with_header(3, format!("2. {icon}{}", count(&posts[1])))
+            .with_raw(widget(posts[1].id))
+            .with_header(3, format!("3. {icon}{}", count(&posts[2])))
+            .with_raw(widget(posts[2].id))
+            .to_html_string()
+    }
 
-    let header = "<h1><a href=digest.html>Айти Тудэй Дайджест</a></h1>";
-
-    let by_replies: String = HtmlPage::new()
-        .with_style(style)
-        .with_title("Айти Тудэй Дайджест")
-        .with_raw(header)
-        .with_header(2, "По комментариям:")
-        .with_header(3, "1.")
-        .with_raw(format!(
-            "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
-            replies[0]
-        ))
-        .with_header(3, "2.")
-        .with_raw(format!(
-            "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
-            replies[1]
-        ))
-        .with_header(3, "3.")
-        .with_raw(format!(
-            "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
-            replies[2]
-        ))
-        .to_html_string();
-
-    let by_reactions: String = HtmlPage::new()
-        .with_style(style)
-        .with_title("Айти Тудэй Дайджест")
-        .with_raw(header)
-        .with_header(2, "По реакциям:")
-        .with_header(3, "1.")
-        .with_raw(format!(
-            "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
-            reactions[0]
-        ))
-        .with_header(3, "2.")
-        .with_raw(format!(
-            "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
-            reactions[1]
-        ))
-        .with_header(3, "3.")
-        .with_raw(format!(
-            "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
-            reactions[2]
-        ))
-        .to_html_string();
-
-    let by_reposts: String = HtmlPage::new()
-        .with_style(style)
-        .with_title("Айти Тудэй Дайджест")
-        .with_raw(header)
-        .with_header(2, "По репостам:")
-        .with_header(3, "1.")
-        .with_raw(format!(
-            "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
-            forwards[0]
-        ))
-        .with_header(3, "2.")
-        .with_raw(format!(
-            "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
-            forwards[1]
-        ))
-        .with_header(3, "3.")
-        .with_raw(format!(
-            "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
-            forwards[2]
-        ))
-        .to_html_string();
-
-    let by_views: String = HtmlPage::new()
-        .with_style(style)
-        .with_title("Айти Тудэй Дайджест")
-        .with_raw(header)
-        .with_header(2, "По просмотрам:")
-        .with_header(3, "1.")
-        .with_raw(format!(
-            "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
-            views[0]
-        ))
-        .with_header(3, "2.")
-        .with_raw(format!(
-            "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
-            views[1]
-        ))
-        .with_header(3, "3.")
-        .with_raw(format!(
-            "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
-            views[2]
-        ))
-        .to_html_string();
-
+    let by_replies: String = generate_page(
+        &replies,
+        "По комментариям",
+        "💬",
+        |post: &Post| post.replies,
+    );
+    let by_reactions: String =
+        generate_page(&reactions, "По реакциям", "♥", |post: &Post| {
+            post.reactions
+        });
+    let by_reposts: String =
+        generate_page(&forwards, "По репостам", "🔁", |post: &Post| {
+            post.forwards
+        });
+    let by_views: String = generate_page(&views, "По просмотрам", "👁", |post: &Post| post.views);
     let digest: String = HtmlPage::new()
-        .with_style(style)
+        .with_style(HTML_STYLE)
         .with_title("Айти Тудэй Дайджест")
-        .with_raw(header)
-        .with_raw("<h2><a href=replies.html>По комментариям</a></h2>")
-        .with_raw("<h2><a href=reactions.html>По реакциям</a></h2>")
-        .with_raw("<h2><a href=reposts.html>По репостам</a></h2>")
-        .with_raw("<h2><a href=views.html>По просмотрам</a></h2>")
+        .with_raw(HTML_HEADER)
+        .with_raw("<h2><a href=replies.html>По комментариям 💬</a></h2>")
+        .with_raw("<h2><a href=reactions.html>По реакциям ♥</a></h2>")
+        .with_raw("<h2><a href=reposts.html>По репостам 🔁</a></h2>")
+        .with_raw("<h2><a href=views.html>По просмотрам 👁</a></h2>")
         .to_html_string();
 
     let mut file = fs::File::create("digest.html")?;
