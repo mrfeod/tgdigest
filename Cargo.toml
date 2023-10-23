@@ -1,0 +1,21 @@
+[package]
+name = "dev_ithueti_client_rust"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+grammers-client = { path = "../grammers/lib/grammers-client" }
+grammers-session = { path = "../grammers/lib/grammers-session" }
+tokio = { version =  "1.33.0", features = ["signal"] }
+simple_logger = "4.2.0"
+futures-util = "0.3.28"
+log = "0.4.20"
+chrono = "0.4.31"
+substring = "1.4.5"
+partial_sort = "0.2.0"
+build_html = "2.4.0"
+
+serde = "1.0.89"
+serde_json = "1.0.107"
