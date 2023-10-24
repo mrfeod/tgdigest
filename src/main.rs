@@ -186,33 +186,42 @@ async fn async_main() -> Result<()> {
 
     println!("Top 3 by comments:");
     for (pos, e) in replies.iter().enumerate() {
-        println!("\t{}. {}: {}\t({})", pos, e.id, e.reactions, e.date);
+        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.reactions, e.date);
     }
     println!("");
     println!("Top 3 by reactions:");
     for (pos, e) in reactions.iter().enumerate() {
-        println!("\t{}. {}: {}\t({})", pos, e.id, e.reactions, e.date);
+        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.reactions, e.date);
     }
     println!("");
     println!("Top 3 by forwards:");
     for (pos, e) in forwards.iter().enumerate() {
-        println!("\t{}. {}: {}\t({})", pos, e.id, e.reactions, e.date);
+        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.reactions, e.date);
     }
     println!("");
     println!("Top 3 by views:");
     for (pos, e) in views.iter().enumerate() {
-        println!("\t{}. {}: {}\t({})", pos, e.id, e.reactions, e.date);
+        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.reactions, e.date);
     }
     println!("");
+
+    fn base_page(title: &str) -> HtmlPage {
+        HtmlPage::new()
+            .with_head_link(
+                "https://static.tildacdn.com/tild6337-3861-4463-a331-313361323738/icon32.png",
+                "icon",
+            )
+            .with_meta(vec![("charset", "UTF-8")])
+            .with_style(HTML_STYLE)
+            .with_title("Айти Тудэй Дайджест")
+            .with_raw(HTML_HEADER)
+    }
 
     fn generate_page<F>(posts: &Vec<Post>, header: &str, icon: &str, count: F) -> String
     where
         F: Fn(&Post) -> i32,
     {
-        HtmlPage::new()
-            .with_style(HTML_STYLE)
-            .with_title("Айти Тудэй Дайджест")
-            .with_raw(HTML_HEADER)
+        base_page(format!("{header}: Айти Тудэй Дайджест").as_str())
             .with_header(2, format!("{header} {icon}"))
             .with_header(3, format!("1. {icon}{}", count(&posts[0])))
             .with_raw(widget(posts[0].id))
@@ -238,10 +247,7 @@ async fn async_main() -> Result<()> {
             post.forwards
         });
     let by_views: String = generate_page(&views, "По просмотрам", "👁", |post: &Post| post.views);
-    let digest: String = HtmlPage::new()
-        .with_style(HTML_STYLE)
-        .with_title("Айти Тудэй Дайджест")
-        .with_raw(HTML_HEADER)
+    let digest: String = base_page("Айти Тудэй Дайджест")
         .with_raw("<h2><a href=replies.html>По комментариям 💬</a></h2>")
         .with_raw("<h2><a href=reactions.html>По реакциям ♥</a></h2>")
         .with_raw("<h2><a href=reposts.html>По репостам 🔁</a></h2>")
