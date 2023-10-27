@@ -36,7 +36,30 @@ const HTML_STYLE: &str = r#"
         font-family: Tenor Sans;
     }"#;
 
-const HTML_HEADER: &str = "<h1><a href=digest.html>Айти Тудэй Дайджест</a></h1>";
+const WIDGET_CLONE_SCRIPT: &str = r#"
+    <script>
+    window.addEventListener('load', function () {
+        const widgets = new Map();
+        const no_widgets = [];
+        var scripts = document.getElementsByTagName("script");
+        for (var i = 0; i < scripts.length; i++) {
+            var widget = scripts[i].parentNode.getElementsByTagName("iframe").item(0);
+            var post = scripts[i].getAttribute("data-telegram-post");
+            if (post) {
+                if (widget) widgets.set(post, widget)
+                else no_widgets.push(i)
+            }
+        }
+        for (var i = 0; i < no_widgets.length; i++) {
+            var script = scripts[no_widgets[i]]
+            var widget = widgets.get(script.getAttribute("data-telegram-post"))
+            script.parentNode.insertBefore(widget.cloneNode(), script)
+        }
+    });
+    </script>
+"#;
+
+const HTML_HEADER: &str = "<h1><a href=/digest>Айти Тудэй Дайджест</a></h1>";
 
 fn widget(post_id: i32) -> String {
     format!(
@@ -205,69 +228,64 @@ async fn async_main() -> Result<()> {
     }
     println!("");
 
-    fn base_page(title: &str) -> HtmlPage {
+    fn base_page() -> HtmlPage {
         HtmlPage::new()
-            .with_head_link(
-                "https://static.tildacdn.com/tild6337-3861-4463-a331-313361323738/icon32.png",
-                "icon",
-            )
             .with_meta(vec![("charset", "UTF-8")])
             .with_style(HTML_STYLE)
             .with_title("Айти Тудэй Дайджест")
             .with_raw(HTML_HEADER)
     }
 
-    fn generate_page<F>(posts: &Vec<Post>, header: &str, icon: &str, count: F) -> String
+    fn generate_page<F>(
+        base: HtmlPage,
+        posts: &Vec<Post>,
+        header: &str,
+        icon: &str,
+        count: F,
+    ) -> HtmlPage
     where
         F: Fn(&Post) -> i32,
     {
-        base_page(format!("{header}: Айти Тудэй Дайджест").as_str())
-            .with_header(2, format!("{header} {icon}"))
+        base.with_header(2, format!("{header} {icon}"))
             .with_header(3, format!("1. {icon}{}", count(&posts[0])))
             .with_raw(widget(posts[0].id))
             .with_header(3, format!("2. {icon}{}", count(&posts[1])))
             .with_raw(widget(posts[1].id))
             .with_header(3, format!("3. {icon}{}", count(&posts[2])))
             .with_raw(widget(posts[2].id))
-            .to_html_string()
     }
-
-    let by_replies: String = generate_page(
+    let digest = generate_page(
+        base_page(),
         &replies,
         "По комментариям",
-        "💬",
+        "💬", // TODO  <img src="https://raw.githubusercontent.com/googlefonts/noto-emoji/main/svg/emoji_u1f4ac.svg" height="32" />
         |post: &Post| post.replies,
     );
-    let by_reactions: String =
-        generate_page(&reactions, "По реакциям", "♥", |post: &Post| {
-            post.reactions
-        });
-    let by_reposts: String =
-        generate_page(&forwards, "По репостам", "🔁", |post: &Post| {
-            post.forwards
-        });
-    let by_views: String = generate_page(&views, "По просмотрам", "👁", |post: &Post| post.views);
-    let digest: String = base_page("Айти Тудэй Дайджест")
-        .with_raw("<h2><a href=replies.html>По комментариям 💬</a></h2>")
-        .with_raw("<h2><a href=reactions.html>По реакциям ♥</a></h2>")
-        .with_raw("<h2><a href=reposts.html>По репостам 🔁</a></h2>")
-        .with_raw("<h2><a href=views.html>По просмотрам 👁</a></h2>")
-        .to_html_string();
+    let digest = generate_page(
+        digest,
+        &reactions,
+        "По реакциям",
+        "♥",
+        |post: &Post| post.reactions,
+    );
+    let digest = generate_page(
+        digest,
+        &forwards,
+        "По репостам",
+        "🔁",
+        |post: &Post| post.forwards,
+    );
+    let digest = generate_page(
+        digest,
+        &views,
+        "По просмотрам",
+        "👁",
+        |post: &Post| post.views,
+    );
+    let digest = digest.with_raw(WIDGET_CLONE_SCRIPT);
 
     let mut file = fs::File::create("digest.html")?;
-    file.write_all(digest.as_bytes())?;
-
-    let mut file = fs::File::create("replies.html")?;
-    file.write_all(by_replies.as_bytes())?;
-
-    let mut file = fs::File::create("reactions.html")?;
-    file.write_all(by_reactions.as_bytes())?;
-
-    let mut file = fs::File::create("reposts.html")?;
-    file.write_all(by_reposts.as_bytes())?;
-
-    let mut file = fs::File::create("views.html")?;
-    file.write_all(by_views.as_bytes())?;
+    file.write_all(digest.to_html_string().as_bytes())?;
 
     if sign_out {
         // TODO revisit examples and get rid of "handle references" (also, this panics)
