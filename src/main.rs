@@ -5,7 +5,6 @@ use grammers_session::Session;
 use log;
 use partial_sort::PartialSort;
 use simple_logger::SimpleLogger;
-use std::env;
 use std::fs;
 use std::io::{self, BufRead as _, Write as _};
 use substring::Substring;
@@ -17,6 +16,15 @@ const SESSION_FILE: &str = "dialogs.session";
 
 const HTML_STYLE: &str = r#"
     @import url("https://fonts.googleapis.com/css?family=Tenor+Sans&display=swap");
+    h1 {
+        display: block;
+        font-size: 2em;
+        margin-block-start: 0.67em;
+        margin-block-end: 0.67em;
+        margin-inline-start: 0px;
+        margin-inline-end: 0px;
+        font-weight: bold;
+    }
     a:link {
         color: black;
         background-color: transparent;
@@ -34,11 +42,19 @@ const HTML_STYLE: &str = r#"
     }
     * {
         font-family: Tenor Sans;
+    }
+    .filter-blue {
+        filter: hue-rotate(185deg);
     }"#;
 
-const WIDGET_CLONE_SCRIPT: &str = r#"
+const HTML_ON_LOAD_SCRIPT: &str = r#"
     <script>
     window.addEventListener('load', function () {
+        var icons = document.getElementsByTagName("img");
+        for (let icon of icons) {
+            icon.height = icon.parentElement.clientHeight * 0.7
+        }
+
         const widgets = new Map();
         const no_widgets = [];
         var scripts = document.getElementsByTagName("script");
@@ -59,7 +75,19 @@ const WIDGET_CLONE_SCRIPT: &str = r#"
     </script>
 "#;
 
-const HTML_HEADER: &str = "<h1><a href=/digest>Айти Тудэй Дайджест</a></h1>";
+const HTML_BLUE_FILTER: &str = "class=\"filter-blue\"";
+
+fn get_utf8_code(char: char) -> String {
+    format!("{:04x}", char as u32)
+}
+
+fn icon(icon: char, filter: Option<&str>) -> String {
+    let src = format!(
+        "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/svg/emoji_u{}.svg",
+        get_utf8_code(icon)
+    );
+    format!("<img src=\"{src}\" height=\"0\" {}/>", filter.unwrap_or(""))
+}
 
 fn widget(post_id: i32) -> String {
     format!(
@@ -90,8 +118,11 @@ async fn async_main() -> Result<()> {
         .init()
         .unwrap();
 
-    let api_id = env!("TG_ID").parse().expect("TG_ID invalid");
-    let api_hash = env!("TG_HASH").to_string();
+    let api_id: i32 = std::env::var("TG_ID")
+        .expect("TG_ID is not set")
+        .parse()
+        .expect("TG_ID is not i32");
+    let api_hash = std::env::var("TG_HASH").expect("TG_HASH is not set");
 
     println!("Connecting to Telegram...");
     let client = Client::connect(Config {
@@ -229,60 +260,64 @@ async fn async_main() -> Result<()> {
     println!("");
 
     fn base_page() -> HtmlPage {
+        let header = Table::new().with_header_row([
+            "<img src=\"https://static.tildacdn.com/tild3834-6636-4436-a331-613738386539/digest_left.png\" height=\"0\" />",
+            "<h1><a href=/digest> Айти Тудэй Дайджест </a></h1>",
+            "<img src=\"https://static.tildacdn.com/tild3437-3835-4831-b333-383239323034/digest_right.png\" height=\"0\" />"]);
         HtmlPage::new()
             .with_meta(vec![("charset", "UTF-8")])
             .with_style(HTML_STYLE)
             .with_title("Айти Тудэй Дайджест")
-            .with_raw(HTML_HEADER)
+            .with_table(header)
     }
 
     fn generate_page<F>(
         base: HtmlPage,
         posts: &Vec<Post>,
         header: &str,
-        icon: &str,
+        icon: String,
         count: F,
     ) -> HtmlPage
     where
         F: Fn(&Post) -> i32,
     {
         base.with_header(2, format!("{header} {icon}"))
-            .with_header(3, format!("1. {icon}{}", count(&posts[0])))
+            .with_header(3, format!("1. {icon} {}", count(&posts[0])))
             .with_raw(widget(posts[0].id))
-            .with_header(3, format!("2. {icon}{}", count(&posts[1])))
+            .with_header(3, format!("2. {icon} {}", count(&posts[1])))
             .with_raw(widget(posts[1].id))
-            .with_header(3, format!("3. {icon}{}", count(&posts[2])))
+            .with_header(3, format!("3. {icon} {}", count(&posts[2])))
             .with_raw(widget(posts[2].id))
     }
     let digest = generate_page(
         base_page(),
         &replies,
         "По комментариям",
-        "💬", // TODO  <img src="https://raw.githubusercontent.com/googlefonts/noto-emoji/main/svg/emoji_u1f4ac.svg" height="32" />
+        icon('💬', None),
         |post: &Post| post.replies,
     );
     let digest = generate_page(
         digest,
         &reactions,
         "По реакциям",
-        "♥",
+        icon('👏', None),
         |post: &Post| post.reactions,
     );
     let digest = generate_page(
         digest,
         &forwards,
         "По репостам",
-        "🔁",
+        icon('🔁', Some(HTML_BLUE_FILTER)), //
         |post: &Post| post.forwards,
     );
     let digest = generate_page(
         digest,
         &views,
         "По просмотрам",
-        "👁",
+        icon('👁', Some(HTML_BLUE_FILTER)),
         |post: &Post| post.views,
     );
-    let digest = digest.with_raw(WIDGET_CLONE_SCRIPT);
+    let digest = digest.with_raw(HTML_ON_LOAD_SCRIPT);
 
     let mut file = fs::File::create("digest.html")?;
     file.write_all(digest.to_html_string().as_bytes())?;
