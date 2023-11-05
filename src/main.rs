@@ -317,6 +317,10 @@ async fn async_main() -> Result<()> {
         icon('👁', Some(HTML_BLUE_FILTER)),
         |post: &Post| post.views,
     );
+    let editor_choice_post_id = 10735;
+    let digest = digest
+        .with_header(2, format!("Выбор редакции {}", "<img src=\"https://static.tildacdn.com/tild3239-6232-4764-a238-373264363337/lonely_face.png\" height=\"0\" />"))
+        .with_raw(widget(editor_choice_post_id));
     let digest = digest.with_raw(HTML_ON_LOAD_SCRIPT);
 
     let mut file = fs::File::create("digest.html")?;
