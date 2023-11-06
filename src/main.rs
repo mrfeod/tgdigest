@@ -1,5 +1,8 @@
 use build_html::*;
+use chromiumoxide::browser::{Browser, BrowserConfig};
+use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chrono::{Local, NaiveDateTime};
+use futures_util::stream::StreamExt;
 use grammers_client::{Client, Config, SignInError};
 use grammers_session::Session;
 use log;
@@ -9,6 +12,8 @@ use std::fs;
 use std::io::{self, BufRead as _, Write as _};
 use substring::Substring;
 use tokio::runtime;
+use tokio::time::sleep;
+use tokio::time::Duration;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -91,9 +96,9 @@ fn icon(icon: char, filter: Option<&str>) -> String {
 
 fn widget(post_id: i32) -> String {
     format!(
-        "<div><script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
+        "<script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
         data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script></div>",
+        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script>",
         post_id
     )
 }
@@ -282,12 +287,21 @@ async fn async_main() -> Result<()> {
         F: Fn(&Post) -> i32,
     {
         base.with_header(2, format!("{header} {icon}"))
-            .with_header(3, format!("1. {icon} {}", count(&posts[0])))
-            .with_raw(widget(posts[0].id))
-            .with_header(3, format!("2. {icon} {}", count(&posts[1])))
-            .with_raw(widget(posts[1].id))
-            .with_header(3, format!("3. {icon} {}", count(&posts[2])))
-            .with_raw(widget(posts[2].id))
+            .with_container(
+                Container::new(ContainerType::Div)
+                    .with_header(3, format!("1. {icon} {}", count(&posts[0])))
+                    .with_raw(widget(posts[0].id)),
+            )
+            .with_container(
+                Container::new(ContainerType::Div)
+                    .with_header(3, format!("2. {icon} {}", count(&posts[1])))
+                    .with_raw(widget(posts[1].id)),
+            )
+            .with_container(
+                Container::new(ContainerType::Div)
+                    .with_header(3, format!("3. {icon} {}", count(&posts[2])))
+                    .with_raw(widget(posts[2].id)),
+            )
     }
     let digest = generate_page(
         base_page(),
@@ -318,13 +332,151 @@ async fn async_main() -> Result<()> {
         |post: &Post| post.views,
     );
     let editor_choice_post_id = 10735;
-    let digest = digest
-        .with_header(2, format!("Выбор редакции {}", "<img src=\"https://static.tildacdn.com/tild3239-6232-4764-a238-373264363337/lonely_face.png\" height=\"0\" />"))
-        .with_raw(widget(editor_choice_post_id));
+    let digest = digest.with_container(
+            Container::new(ContainerType::Div)
+                .with_table(Table::new().with_header_row([
+                    "<h3>Выбор редакции</h3>",
+                    "<img src=\"https://static.tildacdn.com/tild3437-3835-4831-b333-383239323034/digest_right.png\" height=\"0\" />"]))
+                .with_raw(widget(editor_choice_post_id)));
     let digest = digest.with_raw(HTML_ON_LOAD_SCRIPT);
 
     let mut file = fs::File::create("digest.html")?;
     file.write_all(digest.to_html_string().as_bytes())?;
+
+    // Render part
+
+    fn base_render_page() -> HtmlPage {
+        HtmlPage::new()
+            .with_meta(vec![("charset", "UTF-8")])
+            .with_style(HTML_STYLE)
+            .with_style(
+                r#"body {
+                    transform: scale(2);
+                    transform-origin: 0 0;
+                }"#,
+            )
+            .with_title("Айти Тудэй Дайджест")
+    }
+
+    fn generate_block<F>(
+        base: HtmlPage,
+        posts: &Vec<Post>,
+        header: &str,
+        icon: String,
+        count: F,
+    ) -> HtmlPage
+    where
+        F: Fn(&Post) -> i32,
+    {
+        base.with_container(
+            Container::new(ContainerType::Div)
+                .with_header(1, format!("{header} {icon} {}", count(&posts[0])))
+                .with_raw(widget(posts[0].id)),
+        )
+        .with_container(
+            Container::new(ContainerType::Div)
+                .with_header(1, format!("{header} {icon} {}", count(&posts[1])))
+                .with_raw(widget(posts[1].id)),
+        )
+        .with_container(
+            Container::new(ContainerType::Div)
+                .with_header(1, format!("{header} {icon} {}", count(&posts[2])))
+                .with_raw(widget(posts[2].id)),
+        )
+    }
+    let digest = generate_block(
+        base_render_page(),
+        &replies,
+        "По комментариям",
+        icon('💬', None),
+        |post: &Post| post.replies,
+    );
+    let digest = generate_block(
+        digest,
+        &reactions,
+        "По реакциям",
+        icon('👏', None),
+        |post: &Post| post.reactions,
+    );
+    let digest = generate_block(
+        digest,
+        &forwards,
+        "По репостам",
+        icon('🔁', Some(HTML_BLUE_FILTER)), //
+        |post: &Post| post.forwards,
+    );
+    let digest = generate_block(
+        digest,
+        &views,
+        "По просмотрам",
+        icon('👁', Some(HTML_BLUE_FILTER)),
+        |post: &Post| post.views,
+    );
+    let editor_choice_post_id = 10735;
+    let digest = digest.with_container(
+            Container::new(ContainerType::Div)
+                .with_table(Table::new().with_header_row([
+                    "<h1>Выбор редакции</h1>",
+                    "<img src=\"https://static.tildacdn.com/tild3437-3835-4831-b333-383239323034/digest_right.png\" height=\"0\" />"]))
+                .with_raw(widget(editor_choice_post_id)));
+    let digest = digest.with_raw(HTML_ON_LOAD_SCRIPT);
+
+    let mut file = fs::File::create("render.html")?;
+    file.write_all(digest.to_html_string().as_bytes())?;
+
+    let dir = std::env::current_dir()?;
+    let digest_path = dir.join("render.html");
+    let digest = digest_path.to_str().expect("");
+    println!("{digest}");
+
+    // Browser part
+
+    let viewport = chromiumoxide::handler::viewport::Viewport {
+        width: 2000,
+        height: 30000,
+        device_scale_factor: Some(1.0),
+        emulating_mobile: false,
+        is_landscape: false,
+        has_touch: false,
+    };
+
+    let (mut browser, mut handler) = Browser::launch(
+        BrowserConfig::builder()
+            .with_head()
+            .window_size(2000, 30000)
+            .viewport(viewport)
+            .build()?,
+    )
+    .await?;
+
+    // spawn a new task that continuously polls the handler
+    let handle: tokio::task::JoinHandle<()> = tokio::task::spawn(async move {
+        while let Some(h) = handler.next().await {
+            if h.is_err() {
+                break;
+            }
+        }
+    });
+
+    // create a new browser page and navigate to the url
+    let page = browser.new_page(format!("file://{digest}")).await?;
+
+    // find the search bar type into the search field and hit `Enter`,
+    // this triggers a new navigation to the search result page
+    let cards = page.find_elements("div").await?;
+
+    // page.bring_to_front().await?;
+    for (i, card) in cards.iter().enumerate() {
+        // card.focus().await?.scroll_into_view().await?;
+        let _ = card
+            .save_screenshot(CaptureScreenshotFormat::Png, format!("card_{:02}.png", i))
+            .await?;
+    }
+
+    browser.close().await?;
+    let _ = handle.await;
+
+    // End
 
     if sign_out {
         // TODO revisit examples and get rid of "handle references" (also, this panics)
