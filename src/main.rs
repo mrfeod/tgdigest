@@ -331,6 +331,7 @@ async fn async_main() -> Result<()> {
         icon('👁', Some(HTML_BLUE_FILTER)),
         |post: &Post| post.views,
     );
+    let choice_post_id: [usize; 4] = [2, 2, 1, 2];
     let editor_choice_post_id = 10735;
     let digest = digest.with_container(
             Container::new(ContainerType::Div)
@@ -360,7 +361,7 @@ async fn async_main() -> Result<()> {
 
     fn generate_block<F>(
         base: HtmlPage,
-        posts: &Vec<Post>,
+        post: &Post,
         header: &str,
         icon: String,
         count: F,
@@ -368,47 +369,43 @@ async fn async_main() -> Result<()> {
     where
         F: Fn(&Post) -> i32,
     {
+        fn title(header: &str) -> Table {
+            Table::new().with_header_row([
+                "<img src=\"https://static.tildacdn.com/tild3834-6636-4436-a331-613738386539/digest_left.png\" height=\"0\" />",
+                format!("<h2>{header}</h2>").as_str()])
+        }
+
         base.with_container(
             Container::new(ContainerType::Div)
-                .with_header(1, format!("{header} {icon} {}", count(&posts[0])))
-                .with_raw(widget(posts[0].id)),
-        )
-        .with_container(
-            Container::new(ContainerType::Div)
-                .with_header(1, format!("{header} {icon} {}", count(&posts[1])))
-                .with_raw(widget(posts[1].id)),
-        )
-        .with_container(
-            Container::new(ContainerType::Div)
-                .with_header(1, format!("{header} {icon} {}", count(&posts[2])))
-                .with_raw(widget(posts[2].id)),
+                .with_table(title(format!("{header} {icon} {}", count(&post)).as_str()))
+                .with_raw(widget(post.id)),
         )
     }
     let digest = generate_block(
         base_render_page(),
-        &replies,
-        "По комментариям",
+        &replies[choice_post_id[0]],
+        "Лучший по комментариям",
         icon('💬', None),
         |post: &Post| post.replies,
     );
     let digest = generate_block(
         digest,
-        &reactions,
-        "По реакциям",
+        &reactions[choice_post_id[1]],
+        "Лучший по реакциям",
         icon('👏', None),
         |post: &Post| post.reactions,
     );
     let digest = generate_block(
         digest,
-        &forwards,
-        "По репостам",
+        &forwards[choice_post_id[2]],
+        "Лучший по репостам",
         icon('🔁', Some(HTML_BLUE_FILTER)), //
         |post: &Post| post.forwards,
     );
     let digest = generate_block(
         digest,
-        &views,
-        "По просмотрам",
+        &views[choice_post_id[3]],
+        "Лучший по просмотрам",
         icon('👁', Some(HTML_BLUE_FILTER)),
         |post: &Post| post.views,
     );
@@ -416,7 +413,8 @@ async fn async_main() -> Result<()> {
     let digest = digest.with_container(
             Container::new(ContainerType::Div)
                 .with_table(Table::new().with_header_row([
-                    "<h1>Выбор редакции</h1>",
+                    "<img src=\"https://static.tildacdn.com/tild3834-6636-4436-a331-613738386539/digest_left.png\" height=\"0\" />",
+                    "<h2>Выбор редакции</h2>",
                     "<img src=\"https://static.tildacdn.com/tild3437-3835-4831-b333-383239323034/digest_right.png\" height=\"0\" />"]))
                 .with_raw(widget(editor_choice_post_id)));
     let digest = digest.with_raw(HTML_ON_LOAD_SCRIPT);
@@ -460,6 +458,8 @@ async fn async_main() -> Result<()> {
 
     // create a new browser page and navigate to the url
     let page = browser.new_page(format!("file://{digest}")).await?;
+
+    sleep(Duration::from_secs(3)).await;
 
     // find the search bar type into the search field and hit `Enter`,
     // this triggers a new navigation to the search result page
