@@ -1,4 +1,3 @@
-use build_html::*;
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chrono::{Local, NaiveDateTime};
@@ -11,6 +10,7 @@ use simple_logger::SimpleLogger;
 use std::fs;
 use std::io::{self, BufRead as _, Write as _};
 use substring::Substring;
+use tera::Tera;
 use tokio::runtime;
 use tokio::time::sleep;
 use tokio::time::Duration;
@@ -19,87 +19,14 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const SESSION_FILE: &str = "dialogs.session";
 
-const HTML_STYLE: &str = r#"
-    @import url("https://fonts.googleapis.com/css?family=Tenor+Sans&display=swap");
-    h1 {
-        display: block;
-        font-size: 2em;
-        margin-block-start: 0.67em;
-        margin-block-end: 0.67em;
-        margin-inline-start: 0px;
-        margin-inline-end: 0px;
-        font-weight: bold;
-    }
-    a:link {
-        color: black;
-        background-color: transparent;
-        text-decoration: none;
-    }
-    a:visited {
-        color: black;
-        background-color: transparent;
-        text-decoration: none;
-    }
-    div {
-        width: 500px;
-        max-width: 500px;
-        border:3px hidden;
-    }
-    * {
-        font-family: Tenor Sans;
-    }
-    .filter-blue {
-        filter: hue-rotate(185deg);
-    }"#;
-
-const HTML_ON_LOAD_SCRIPT: &str = r#"
-    <script>
-    window.addEventListener('load', function () {
-        var icons = document.getElementsByTagName("img");
-        for (let icon of icons) {
-            icon.height = icon.parentElement.clientHeight * 0.7
-        }
-
-        const widgets = new Map();
-        const no_widgets = [];
-        var scripts = document.getElementsByTagName("script");
-        for (var i = 0; i < scripts.length; i++) {
-            var widget = scripts[i].parentNode.getElementsByTagName("iframe").item(0);
-            var post = scripts[i].getAttribute("data-telegram-post");
-            if (post) {
-                if (widget) widgets.set(post, widget)
-                else no_widgets.push(i)
-            }
-        }
-        for (var i = 0; i < no_widgets.length; i++) {
-            var script = scripts[no_widgets[i]]
-            var widget = widgets.get(script.getAttribute("data-telegram-post"))
-            script.parentNode.insertBefore(widget.cloneNode(), script)
-        }
-    });
-    </script>
-"#;
-
-const HTML_BLUE_FILTER: &str = "class=\"filter-blue\"";
-
 fn get_utf8_code(char: char) -> String {
     format!("{:04x}", char as u32)
 }
 
-fn icon(icon: char, filter: Option<&str>) -> String {
-    let src = format!(
+fn icon_url(icon: char) -> String {
+    format!(
         "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/svg/emoji_u{}.svg",
         get_utf8_code(icon)
-    );
-    format!("<img src=\"{src}\" height=\"0\" {}/>", filter.unwrap_or(""))
-}
-
-fn widget(post_id: i32) -> String {
-    format!(
-        "<script async src=\"https://telegram.org/js/telegram-widget.js?22\"\
-        data-telegram-post=\"ithueti/{}\" data-width=\"100%\"\
-        data-userpic=\"false\" data-color=\"343638\" data-dark-color=\"FFFFFF\"></script>",
-        post_id
     )
 }
 
@@ -245,7 +172,7 @@ async fn async_main() -> Result<()> {
 
     println!("Top 3 by comments:");
     for (pos, e) in replies.iter().enumerate() {
-        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.reactions, e.date);
+        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.replies, e.date);
     }
     println!("");
     println!("Top 3 by reactions:");
@@ -255,177 +182,170 @@ async fn async_main() -> Result<()> {
     println!("");
     println!("Top 3 by forwards:");
     for (pos, e) in forwards.iter().enumerate() {
-        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.reactions, e.date);
+        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.forwards, e.date);
     }
     println!("");
     println!("Top 3 by views:");
     for (pos, e) in views.iter().enumerate() {
-        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.reactions, e.date);
+        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.views, e.date);
     }
     println!("");
 
-    fn base_page() -> HtmlPage {
-        let header = Table::new().with_header_row([
-            "<img src=\"https://static.tildacdn.com/tild3834-6636-4436-a331-613738386539/digest_left.png\" height=\"0\" />",
-            "<h1><a href=/digest> Айти Тудэй Дайджест </a></h1>",
-            "<img src=\"https://static.tildacdn.com/tild3437-3835-4831-b333-383239323034/digest_right.png\" height=\"0\" />"]);
-        HtmlPage::new()
-            .with_meta(vec![("charset", "UTF-8")])
-            .with_style(HTML_STYLE)
-            .with_title("Айти Тудэй Дайджест")
-            .with_table(header)
+    let card_post_index: [usize; 4] = [2, 2, 1, 2];
+    let editor_choice_post_id = 10828;
+
+    #[derive(Clone, serde::Serialize)]
+    struct WidgetData {
+        id: i32,
+        count: i32,
     }
 
-    fn generate_page<F>(
-        base: HtmlPage,
-        posts: &Vec<Post>,
-        header: &str,
+    #[derive(Clone, serde::Serialize)]
+    struct Block {
+        header: String,
         icon: String,
-        count: F,
-    ) -> HtmlPage
+        use_filter: bool,
+        filter: String,
+        cards: Vec<WidgetData>,
+    }
+
+    fn create_cards<F>(posts: &Vec<Post>, count: F) -> Vec<WidgetData>
     where
         F: Fn(&Post) -> i32,
     {
-        base.with_header(2, format!("{header} {icon}"))
-            .with_container(
-                Container::new(ContainerType::Div)
-                    .with_header(3, format!("1. {icon} {}", count(&posts[0])))
-                    .with_raw(widget(posts[0].id)),
-            )
-            .with_container(
-                Container::new(ContainerType::Div)
-                    .with_header(3, format!("2. {icon} {}", count(&posts[1])))
-                    .with_raw(widget(posts[1].id)),
-            )
-            .with_container(
-                Container::new(ContainerType::Div)
-                    .with_header(3, format!("3. {icon} {}", count(&posts[2])))
-                    .with_raw(widget(posts[2].id)),
-            )
-    }
-    let digest = generate_page(
-        base_page(),
-        &replies,
-        "По комментариям",
-        icon('💬', None),
-        |post: &Post| post.replies,
-    );
-    let digest = generate_page(
-        digest,
-        &reactions,
-        "По реакциям",
-        icon('👏', None),
-        |post: &Post| post.reactions,
-    );
-    let digest = generate_page(
-        digest,
-        &forwards,
-        "По репостам",
-        icon('🔁', Some(HTML_BLUE_FILTER)), //
-        |post: &Post| post.forwards,
-    );
-    let digest = generate_page(
-        digest,
-        &views,
-        "По просмотрам",
-        icon('👁', Some(HTML_BLUE_FILTER)),
-        |post: &Post| post.views,
-    );
-    let choice_post_id: [usize; 4] = [2, 2, 1, 2];
-    let editor_choice_post_id = 10735;
-    let digest = digest.with_container(
-            Container::new(ContainerType::Div)
-                .with_table(Table::new().with_header_row([
-                    "<h3>Выбор редакции</h3>",
-                    "<img src=\"https://static.tildacdn.com/tild3437-3835-4831-b333-383239323034/digest_right.png\" height=\"0\" />"]))
-                .with_raw(widget(editor_choice_post_id)));
-    let digest = digest.with_raw(HTML_ON_LOAD_SCRIPT);
-
-    let mut file = fs::File::create("digest.html")?;
-    file.write_all(digest.to_html_string().as_bytes())?;
-
-    // Render part
-
-    fn base_render_page() -> HtmlPage {
-        HtmlPage::new()
-            .with_meta(vec![("charset", "UTF-8")])
-            .with_style(HTML_STYLE)
-            .with_style(
-                r#"body {
-                    transform: scale(2);
-                    transform-origin: 0 0;
-                }"#,
-            )
-            .with_title("Айти Тудэй Дайджест")
+        posts
+            .iter()
+            .map(|p| WidgetData {
+                id: p.id,
+                count: count(p),
+            })
+            .collect()
     }
 
-    fn generate_block<F>(
-        base: HtmlPage,
-        post: &Post,
-        header: &str,
+    let default_block = Block {
+        header: String::from("UNDEFINED"),
+        icon: icon_url('❌'),
+        use_filter: false,
+        filter: String::from(""),
+        cards: vec![],
+    };
+
+    let blocks = vec![
+        Block {
+            header: String::from("По комментариям"),
+            icon: icon_url('💬'),
+            cards: create_cards(&replies, |p: &Post| p.replies),
+            ..default_block.clone()
+        },
+        Block {
+            header: String::from("По реакциям"),
+            icon: icon_url('👏'),
+            cards: create_cards(&reactions, |p: &Post| p.reactions),
+            ..default_block
+        },
+        Block {
+            header: String::from("По репостам"),
+            icon: icon_url('🔁'),
+            use_filter: true,
+            filter: String::from("filter-blue"),
+            cards: create_cards(&forwards, |p: &Post| p.forwards),
+        },
+        Block {
+            header: String::from("По просмотрам"),
+            icon: icon_url('👁'),
+            use_filter: true,
+            filter: String::from("filter-blue"),
+            cards: create_cards(&views, |p: &Post| p.views),
+        },
+    ];
+
+    #[derive(Clone, serde::Serialize)]
+    struct CardData {
+        id: i32,
+        header: String,
         icon: String,
-        count: F,
-    ) -> HtmlPage
-    where
-        F: Fn(&Post) -> i32,
-    {
-        fn title(header: &str) -> Table {
-            Table::new().with_header_row([
-                "<img src=\"https://static.tildacdn.com/tild3834-6636-4436-a331-613738386539/digest_left.png\" height=\"0\" />",
-                format!("<h2>{header}</h2>").as_str()])
-        }
-
-        base.with_container(
-            Container::new(ContainerType::Div)
-                .with_table(title(format!("{header} {icon} {}", count(&post)).as_str()))
-                .with_raw(widget(post.id)),
-        )
+        use_filter: bool,
+        filter: String,
+        count: i32,
     }
-    let digest = generate_block(
-        base_render_page(),
-        &replies[choice_post_id[0]],
-        "Лучший по комментариям",
-        icon('💬', None),
-        |post: &Post| post.replies,
-    );
-    let digest = generate_block(
-        digest,
-        &reactions[choice_post_id[1]],
-        "Лучший по реакциям",
-        icon('👏', None),
-        |post: &Post| post.reactions,
-    );
-    let digest = generate_block(
-        digest,
-        &forwards[choice_post_id[2]],
-        "Лучший по репостам",
-        icon('🔁', Some(HTML_BLUE_FILTER)), //
-        |post: &Post| post.forwards,
-    );
-    let digest = generate_block(
-        digest,
-        &views[choice_post_id[3]],
-        "Лучший по просмотрам",
-        icon('👁', Some(HTML_BLUE_FILTER)),
-        |post: &Post| post.views,
-    );
-    let editor_choice_post_id = 10735;
-    let digest = digest.with_container(
-            Container::new(ContainerType::Div)
-                .with_table(Table::new().with_header_row([
-                    "<img src=\"https://static.tildacdn.com/tild3834-6636-4436-a331-613738386539/digest_left.png\" height=\"0\" />",
-                    "<h2>Выбор редакции</h2>",
-                    "<img src=\"https://static.tildacdn.com/tild3437-3835-4831-b333-383239323034/digest_right.png\" height=\"0\" />"]))
-                .with_raw(widget(editor_choice_post_id)));
-    let digest = digest.with_raw(HTML_ON_LOAD_SCRIPT);
 
-    let mut file = fs::File::create("render.html")?;
-    file.write_all(digest.to_html_string().as_bytes())?;
+    let default_card = CardData {
+        id: -1,
+        header: String::from("UNDEFINED"),
+        icon: icon_url('❌'),
+        use_filter: false,
+        filter: String::from(""),
+        count: -1,
+    };
+
+    let cards = vec![
+        CardData {
+            id: replies[card_post_index[0]].id,
+            header: String::from("Лучший по комментариям"),
+            icon: icon_url('💬'),
+            count: replies[card_post_index[0]].replies,
+            ..default_card.clone()
+        },
+        CardData {
+            id: reactions[card_post_index[1]].id,
+            header: String::from("Лучший по реакциям"),
+            icon: icon_url('👏'),
+            count: reactions[card_post_index[1]].reactions,
+            ..default_card
+        },
+        CardData {
+            id: forwards[card_post_index[2]].id,
+            header: String::from("Лучший по репостам"),
+            icon: icon_url('🔁'),
+            use_filter: true,
+            filter: String::from("filter-blue"),
+            count: forwards[card_post_index[2]].forwards,
+        },
+        CardData {
+            id: views[card_post_index[3]].id,
+            header: String::from("Лучший по просмотрам"),
+            icon: icon_url('👁'),
+            use_filter: true,
+            filter: String::from("filter-blue"),
+            count: views[card_post_index[3]].views,
+        },
+    ];
+
+    // Template part
+
+    // Digest rendering
 
     let dir = std::env::current_dir()?;
-    let digest_path = dir.join("render.html");
-    let digest = digest_path.to_str().expect("");
-    println!("{digest}");
+
+    let mut tera = Tera::default();
+
+    let digest_template = dir.join("digest_template.html");
+    tera.add_template_file(digest_template, Some("digest.html"))
+        .unwrap();
+
+    let mut digest_context = tera::Context::new();
+    digest_context.insert("blocks", &blocks);
+    digest_context.insert("editor_choice_id", &editor_choice_post_id);
+
+    let rendered = tera.render("digest.html", &digest_context).unwrap();
+
+    let mut file = fs::File::create("digest.html")?;
+    file.write_all(rendered.as_bytes())?;
+
+    // Card rendering
+
+    let render_template = dir.join("render_template.html");
+    tera.add_template_file(render_template, Some("render.html"))
+        .unwrap();
+
+    let mut render_context = tera::Context::new();
+    render_context.insert("cards", &cards);
+    render_context.insert("editor_choice_id", &editor_choice_post_id);
+
+    let rendered = tera.render("render.html", &render_context).unwrap();
+
+    let mut file = fs::File::create("render.html")?;
+    file.write_all(rendered.as_bytes())?;
 
     // Browser part
 
@@ -457,7 +377,9 @@ async fn async_main() -> Result<()> {
     });
 
     // create a new browser page and navigate to the url
-    let page = browser.new_page(format!("file://{digest}")).await?;
+    let render_page_path = dir.join("render.html");
+    let render_page = render_page_path.to_str().unwrap();
+    let page = browser.new_page(format!("file://{render_page}")).await?;
 
     sleep(Duration::from_secs(3)).await;
 
