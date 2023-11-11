@@ -1,6 +1,6 @@
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
-use chrono::{Local, NaiveDateTime};
+use chrono::{DateTime, Local, Utc};
 use futures_util::stream::StreamExt;
 use grammers_client::{Client, Config, SignInError};
 use grammers_session::Session;
@@ -9,7 +9,6 @@ use partial_sort::PartialSort;
 use simple_logger::SimpleLogger;
 use std::fs;
 use std::io::{self, BufRead as _, Write as _};
-use substring::Substring;
 use tera::Tera;
 use tokio::runtime;
 use tokio::time::sleep;
@@ -18,6 +17,166 @@ use tokio::time::Duration;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const SESSION_FILE: &str = "dialogs.session";
+
+enum ActionType {
+    Replies = 0,
+    Reactions,
+    Forwards,
+    Views,
+}
+
+impl ActionType {
+    fn from(value: usize) -> ActionType {
+        match value {
+            0 => ActionType::Replies,
+            1 => ActionType::Reactions,
+            2 => ActionType::Forwards,
+            3 => ActionType::Views,
+            _ => panic!("No ActionType for {value}"),
+        }
+    }
+}
+
+#[derive(Copy, Clone, serde::Serialize)]
+pub struct Post {
+    date: i64,
+    id: i32,
+    views: i32,
+    forwards: i32,
+    replies: i32,
+    reactions: i32,
+}
+
+#[derive(serde::Serialize)]
+struct TopPost<const N: usize> {
+    replies: Vec<Post>,
+    reactions: Vec<Post>,
+    forwards: Vec<Post>,
+    views: Vec<Post>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct WidgetData {
+    id: i32,
+    count: i32,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct Block {
+    header: String,
+    icon: String,
+    use_filter: bool,
+    filter: String,
+    cards: Vec<WidgetData>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct CardData {
+    id: i32,
+    header: String,
+    icon: String,
+    use_filter: bool,
+    filter: String,
+    count: i32,
+}
+
+impl Post {
+    async fn get_by_date(
+        messages: &mut grammers_client::client::messages::MessageIter,
+        from_date: DateTime<Utc>,
+        to_date: DateTime<Utc>,
+    ) -> Result<Vec<Post>> {
+        let mut posts: Vec<Post> = Vec::new();
+
+        while let Some(message) = messages.next().await? {
+            let message: grammers_client::types::Message = message;
+
+            let date = DateTime::<Utc>::from_timestamp(message.date().timestamp(), 0).unwrap();
+            if date > to_date {
+                continue;
+            }
+            if date < from_date {
+                break;
+            }
+
+            // let text = message.text().substring(0, 21);
+            posts.push(Post {
+                date: date.timestamp(),
+                id: message.id(),
+                views: message.view_count().unwrap_or(-1),
+                forwards: message.forward_count().unwrap_or(-1),
+                replies: message.reply_count().unwrap_or(-1),
+                reactions: message.reaction_count().unwrap_or(-1),
+            });
+        }
+
+        Result::Ok(posts)
+    }
+
+    fn count(&self, index: &ActionType) -> i32 {
+        match index {
+            ActionType::Replies => self.replies,
+            ActionType::Reactions => self.reactions,
+            ActionType::Forwards => self.forwards,
+            ActionType::Views => self.views,
+        }
+    }
+}
+
+impl<const N: usize> TopPost<N> {
+    fn get_top_by<F>(posts: &mut Vec<Post>, comp: F) -> Vec<Post>
+    where
+        F: FnMut(&Post, &Post) -> core::cmp::Ordering,
+    {
+        if posts.len() < N {
+            panic!("Size of posts less than {N}")
+        }
+
+        posts.partial_sort(N, comp);
+        posts[0..N].to_vec()
+    }
+
+    fn get_top(posts: &mut Vec<Post>) -> TopPost<N> {
+        TopPost {
+            replies: Self::get_top_by(posts, |a, b| b.replies.cmp(&a.replies)),
+            reactions: Self::get_top_by(posts, |a, b| b.reactions.cmp(&a.reactions)),
+            forwards: Self::get_top_by(posts, |a, b| b.forwards.cmp(&a.forwards)),
+            views: Self::get_top_by(posts, |a, b| b.views.cmp(&a.views)),
+        }
+    }
+
+    fn index(&self, index: &ActionType) -> &Vec<Post> {
+        match index {
+            ActionType::Replies => &self.replies,
+            ActionType::Reactions => &self.reactions,
+            ActionType::Forwards => &self.forwards,
+            ActionType::Views => &self.views,
+        }
+    }
+
+    fn print(&self) {
+        let headers = [
+            format!("Top {N} by comments:"),
+            format!("Top {N} by reactions:"),
+            format!("Top {N} by forwards:"),
+            format!("Top {N} by views:"),
+        ];
+        for (i, header) in headers.iter().enumerate() {
+            println!("{header}");
+            let action = ActionType::from(i);
+            for (i, post) in self.index(&action).iter().enumerate() {
+                println!(
+                    "\t{}. {}: {}\t({})",
+                    i + 1,
+                    post.id,
+                    post.count(&action),
+                    DateTime::<Utc>::from_timestamp(post.date, 0).unwrap()
+                );
+            }
+            println!("");
+        }
+    }
+}
 
 fn get_utf8_code(char: char) -> String {
     format!("{:04x}", char as u32)
@@ -114,100 +273,18 @@ async fn async_main() -> Result<()> {
 
     let ithueti = client_handle.resolve_username("ithueti").await?.unwrap();
     let mut messages = client_handle.iter_messages(ithueti).limit(500);
-    let current_date = Local::now().naive_utc();
+    let current_date = DateTime::<Utc>::from_timestamp(Local::now().timestamp(), 0).unwrap();
+    let week_ago = current_date - chrono::Duration::days(8);
     println!("Now {current_date}");
+    println!("8 days ago {week_ago}");
 
-    #[derive(Copy, Clone)]
-    pub struct Post {
-        date: NaiveDateTime,
-        id: i32,
-        views: i32,
-        forwards: i32,
-        replies: i32,
-        reactions: i32,
-    }
-    let mut posts: Vec<Post> = Vec::new();
+    let mut posts = Post::get_by_date(&mut messages, week_ago, current_date).await?;
 
-    while let Some(message) = messages.next().await? {
-        let message: grammers_client::types::Message = message;
-
-        let date: NaiveDateTime = message.date().naive_utc();
-        let diff = current_date - date;
-        if diff.num_days() > 7 {
-            break;
-        }
-
-        let text = message.text().substring(0, 21);
-        println!(
-            "{} day(s) ago: id = {}; views = {}; forwards = {}; replies = {}; reactions = {}; text = {}; ",
-            diff.num_days(),
-            message.id(),
-            message.view_count().unwrap_or(-1),
-            message.forward_count().unwrap_or(-1),
-            message.reply_count().unwrap_or(-1),
-            message.reaction_count().unwrap_or(-1),
-            text.replace('\n', " ")
-        );
-        posts.push(Post {
-            date: date,
-            id: message.id(),
-            views: message.view_count().unwrap_or(-1),
-            forwards: message.forward_count().unwrap_or(-1),
-            replies: message.reply_count().unwrap_or(-1),
-            reactions: message.reaction_count().unwrap_or(-1),
-        });
-    }
-
-    posts.partial_sort(3, |a, b| b.replies.cmp(&a.replies));
-    let replies = vec![posts[0], posts[1], posts[2]];
-
-    posts.partial_sort(3, |a, b| b.reactions.cmp(&a.reactions));
-    let reactions = vec![posts[0], posts[1], posts[2]];
-
-    posts.partial_sort(3, |a, b| b.forwards.cmp(&a.forwards));
-    let forwards = vec![posts[0], posts[1], posts[2]];
-
-    posts.partial_sort(3, |a, b| b.views.cmp(&a.views));
-    let views = vec![posts[0], posts[1], posts[2]];
-
-    println!("Top 3 by comments:");
-    for (pos, e) in replies.iter().enumerate() {
-        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.replies, e.date);
-    }
-    println!("");
-    println!("Top 3 by reactions:");
-    for (pos, e) in reactions.iter().enumerate() {
-        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.reactions, e.date);
-    }
-    println!("");
-    println!("Top 3 by forwards:");
-    for (pos, e) in forwards.iter().enumerate() {
-        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.forwards, e.date);
-    }
-    println!("");
-    println!("Top 3 by views:");
-    for (pos, e) in views.iter().enumerate() {
-        println!("\t{}. {}: {}\t({})", pos + 1, e.id, e.views, e.date);
-    }
-    println!("");
+    let post_top = TopPost::<3>::get_top(&mut posts);
+    post_top.print();
 
     let card_post_index: [usize; 4] = [2, 2, 1, 2];
-    let editor_choice_post_id = 10828;
-
-    #[derive(Clone, serde::Serialize)]
-    struct WidgetData {
-        id: i32,
-        count: i32,
-    }
-
-    #[derive(Clone, serde::Serialize)]
-    struct Block {
-        header: String,
-        icon: String,
-        use_filter: bool,
-        filter: String,
-        cards: Vec<WidgetData>,
-    }
+    let editor_choice_post_id = 10845;
 
     fn create_cards<F>(posts: &Vec<Post>, count: F) -> Vec<WidgetData>
     where
@@ -234,13 +311,13 @@ async fn async_main() -> Result<()> {
         Block {
             header: String::from("По комментариям"),
             icon: icon_url('💬'),
-            cards: create_cards(&replies, |p: &Post| p.replies),
+            cards: create_cards(&post_top.replies, |p: &Post| p.replies),
             ..default_block.clone()
         },
         Block {
             header: String::from("По реакциям"),
             icon: icon_url('👏'),
-            cards: create_cards(&reactions, |p: &Post| p.reactions),
+            cards: create_cards(&post_top.reactions, |p: &Post| p.reactions),
             ..default_block
         },
         Block {
@@ -248,26 +325,16 @@ async fn async_main() -> Result<()> {
             icon: icon_url('🔁'),
             use_filter: true,
             filter: String::from("filter-blue"),
-            cards: create_cards(&forwards, |p: &Post| p.forwards),
+            cards: create_cards(&post_top.forwards, |p: &Post| p.forwards),
         },
         Block {
             header: String::from("По просмотрам"),
             icon: icon_url('👁'),
             use_filter: true,
             filter: String::from("filter-blue"),
-            cards: create_cards(&views, |p: &Post| p.views),
+            cards: create_cards(&post_top.views, |p: &Post| p.views),
         },
     ];
-
-    #[derive(Clone, serde::Serialize)]
-    struct CardData {
-        id: i32,
-        header: String,
-        icon: String,
-        use_filter: bool,
-        filter: String,
-        count: i32,
-    }
 
     let default_card = CardData {
         id: -1,
@@ -280,34 +347,34 @@ async fn async_main() -> Result<()> {
 
     let cards = vec![
         CardData {
-            id: replies[card_post_index[0]].id,
+            id: post_top.replies[card_post_index[0]].id,
             header: String::from("Лучший по комментариям"),
             icon: icon_url('💬'),
-            count: replies[card_post_index[0]].replies,
+            count: post_top.replies[card_post_index[0]].replies,
             ..default_card.clone()
         },
         CardData {
-            id: reactions[card_post_index[1]].id,
+            id: post_top.reactions[card_post_index[1]].id,
             header: String::from("Лучший по реакциям"),
             icon: icon_url('👏'),
-            count: reactions[card_post_index[1]].reactions,
+            count: post_top.reactions[card_post_index[1]].reactions,
             ..default_card
         },
         CardData {
-            id: forwards[card_post_index[2]].id,
+            id: post_top.forwards[card_post_index[2]].id,
             header: String::from("Лучший по репостам"),
             icon: icon_url('🔁'),
             use_filter: true,
             filter: String::from("filter-blue"),
-            count: forwards[card_post_index[2]].forwards,
+            count: post_top.forwards[card_post_index[2]].forwards,
         },
         CardData {
-            id: views[card_post_index[3]].id,
+            id: post_top.views[card_post_index[3]].id,
             header: String::from("Лучший по просмотрам"),
             icon: icon_url('👁'),
             use_filter: true,
             filter: String::from("filter-blue"),
-            count: views[card_post_index[3]].views,
+            count: post_top.views[card_post_index[3]].views,
         },
     ];
 
