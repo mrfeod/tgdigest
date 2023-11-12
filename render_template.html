@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <style>
+        @import url("https://fonts.googleapis.com/css?family=Tenor+Sans&display=swap");
+
+        h1 {
+            display: block;
+            font-size: 2em;
+            margin-block-start: 0.67em;
+            margin-block-end: 0.67em;
+            margin-inline-start: 0px;
+            margin-inline-end: 0px;
+            font-weight: bold;
+        }
+
+        a:link {
+            color: black;
+            background-color: transparent;
+            text-decoration: none;
+        }
+
+        a:visited {
+            color: black;
+            background-color: transparent;
+            text-decoration: none;
+        }
+
+        div {
+            width: 500px;
+            max-width: 500px;
+            border: 3px hidden;
+        }
+
+        * {
+            font-family: Tenor Sans;
+        }
+
+        .filter-blue {
+            filter: hue-rotate(185deg);
+        }
+
+        body {
+            transform: scale(2);
+            transform-origin: 0 0;
+        }
+    </style>
+    <title>Айти Тудэй Дайджест</title>
+</head>
+
+<body>
+    {% for card in cards %}
+    <div>
+        <table>
+            <thead>
+                <tr>
+                    <th><img src="https://static.tildacdn.com/tild3834-6636-4436-a331-613738386539/digest_left.png"
+                            height="0" /></th>
+                    <th>
+                        <h2>{{ card.header }} <img {% if card.use_filter %} class="{{ card.filter }}" {% endif %}
+                                src="{{ card.icon }}" height="0" /> {{ card.count }}</h2>
+                    </th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+        <script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-post="ithueti/{{ card.id }}"
+            data-width="100%" data-userpic="false" data-color="343638" data-dark-color="FFFFFF"></script>
+    </div>
+    {% endfor %}
+    <div>
+        <table>
+            <thead>
+                <tr>
+                    <th><img src="https://static.tildacdn.com/tild3834-6636-4436-a331-613738386539/digest_left.png"
+                            height="0" /></th>
+                    <th>
+                        <h2>Выбор редакции</h2>
+                    </th>
+                    <th><img src="https://static.tildacdn.com/tild3437-3835-4831-b333-383239323034/digest_right.png"
+                            height="0" /></th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+        <script async src="https://telegram.org/js/telegram-widget.js?22"
+            data-telegram-post="ithueti/{{ editor_choice_id }}" data-width="100%" data-userpic="false"
+            data-color="343638" data-dark-color="FFFFFF"></script>
+    </div>
+    <script>
+        window.addEventListener('load', function () {
+            var icons = document.getElementsByTagName("img");
+            for (let icon of icons) {
+                icon.height = icon.parentElement.clientHeight * 0.7
+            }
+
+            const widgets = new Map();
+            const no_widgets = [];
+            var scripts = document.getElementsByTagName("script");
+            for (var i = 0; i < scripts.length; i++) {
+                var widget = scripts[i].parentNode.getElementsByTagName("iframe").item(0);
+                var post = scripts[i].getAttribute("data-telegram-post");
+                if (post) {
+                    if (widget) widgets.set(post, widget)
+                    else no_widgets.push(i)
+                }
+            }
+            for (var i = 0; i < no_widgets.length; i++) {
+                var script = scripts[no_widgets[i]]
+                var widget = widgets.get(script.getAttribute("data-telegram-post"))
+                script.parentNode.insertBefore(widget.cloneNode(), script)
+            }
+        });
+    </script>
+</body>
+
+</html>
