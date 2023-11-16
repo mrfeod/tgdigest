@@ -18,6 +18,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const SESSION_FILE: &str = "dialogs.session";
 
+#[derive(Copy, Clone)]
 enum ActionType {
     Replies = 0,
     Reactions,
@@ -45,39 +46,6 @@ pub struct Post {
     forwards: i32,
     replies: i32,
     reactions: i32,
-}
-
-#[derive(serde::Serialize)]
-struct TopPost<const N: usize> {
-    replies: Vec<Post>,
-    reactions: Vec<Post>,
-    forwards: Vec<Post>,
-    views: Vec<Post>,
-}
-
-#[derive(Clone, serde::Serialize)]
-struct WidgetData {
-    id: i32,
-    count: i32,
-}
-
-#[derive(Clone, serde::Serialize)]
-struct Block {
-    header: String,
-    icon: String,
-    use_filter: bool,
-    filter: String,
-    cards: Vec<WidgetData>,
-}
-
-#[derive(Clone, serde::Serialize)]
-struct CardData {
-    id: i32,
-    header: String,
-    icon: String,
-    use_filter: bool,
-    filter: String,
-    count: i32,
 }
 
 impl Post {
@@ -113,7 +81,7 @@ impl Post {
         Result::Ok(posts)
     }
 
-    fn count(&self, index: &ActionType) -> i32 {
+    fn count(&self, index: ActionType) -> i32 {
         match index {
             ActionType::Replies => self.replies,
             ActionType::Reactions => self.reactions,
@@ -123,29 +91,34 @@ impl Post {
     }
 }
 
+#[derive(serde::Serialize)]
+struct TopPost<const N: usize> {
+    replies: Vec<Post>,
+    reactions: Vec<Post>,
+    forwards: Vec<Post>,
+    views: Vec<Post>,
+}
+
 impl<const N: usize> TopPost<N> {
-    fn get_top_by<F>(posts: &mut Vec<Post>, comp: F) -> Vec<Post>
-    where
-        F: FnMut(&Post, &Post) -> core::cmp::Ordering,
-    {
+    fn get_top_by(posts: &mut Vec<Post>, action: ActionType) -> Vec<Post> {
         if posts.len() < N {
             panic!("Size of posts less than {N}")
         }
 
-        posts.partial_sort(N, comp);
+        posts.partial_sort(N, |a, b| b.count(action).cmp(&a.count(action)));
         posts[0..N].to_vec()
     }
 
     fn get_top(posts: &mut Vec<Post>) -> TopPost<N> {
         TopPost {
-            replies: Self::get_top_by(posts, |a, b| b.replies.cmp(&a.replies)),
-            reactions: Self::get_top_by(posts, |a, b| b.reactions.cmp(&a.reactions)),
-            forwards: Self::get_top_by(posts, |a, b| b.forwards.cmp(&a.forwards)),
-            views: Self::get_top_by(posts, |a, b| b.views.cmp(&a.views)),
+            replies: Self::get_top_by(posts, ActionType::Replies),
+            reactions: Self::get_top_by(posts, ActionType::Reactions),
+            forwards: Self::get_top_by(posts, ActionType::Forwards),
+            views: Self::get_top_by(posts, ActionType::Views),
         }
     }
 
-    fn index(&self, index: &ActionType) -> &Vec<Post> {
+    fn index(&self, index: ActionType) -> &Vec<Post> {
         match index {
             ActionType::Replies => &self.replies,
             ActionType::Reactions => &self.reactions,
@@ -161,15 +134,15 @@ impl<const N: usize> TopPost<N> {
             format!("Top {N} by forwards:"),
             format!("Top {N} by views:"),
         ];
-        for (i, header) in headers.iter().enumerate() {
+        for (index, header) in headers.iter().enumerate() {
             println!("{header}");
-            let action = ActionType::from(i);
-            for (i, post) in self.index(&action).iter().enumerate() {
+            let action = ActionType::from(index);
+            for (pos, post) in self.index(action).iter().enumerate() {
                 println!(
                     "\t{}. {}: {}\t({})",
-                    i + 1,
+                    pos + 1,
                     post.id,
-                    post.count(&action),
+                    post.count(action),
                     DateTime::<Utc>::from_timestamp(post.date, 0).unwrap()
                 );
             }
@@ -178,14 +151,66 @@ impl<const N: usize> TopPost<N> {
     }
 }
 
-fn get_utf8_code(char: char) -> String {
-    format!("{:04x}", char as u32)
+#[derive(Clone, serde::Serialize)]
+struct Card {
+    id: i32,
+    header: String,
+    icon: String,
+    use_filter: bool,
+    filter: String,
+    count: i32,
 }
 
-fn icon_url(icon: char) -> String {
+impl Card {
+    fn default() -> Self {
+        Card {
+            id: -1,
+            header: String::from("UNDEFINED"),
+            icon: icon_url("⚠️"),
+            use_filter: false,
+            filter: String::from(""),
+            count: -1,
+        }
+    }
+
+    fn create_card(post: &Post, action: ActionType) -> Card {
+        Card {
+            id: post.id,
+            count: post.count(action),
+            ..Card::default()
+        }
+    }
+
+    fn create_cards(posts: &Vec<Post>, action: ActionType) -> Vec<Card> {
+        posts.iter().map(|p| Card::create_card(p, action)).collect()
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+struct Block {
+    header: String,
+    icon: String,
+    use_filter: bool,
+    filter: String,
+    cards: Vec<Card>,
+}
+
+impl Block {
+    fn default() -> Self {
+        Block {
+            header: String::from("UNDEFINED"),
+            icon: icon_url("⚠️"),
+            use_filter: false,
+            filter: String::from(""),
+            cards: vec![],
+        }
+    }
+}
+
+fn icon_url(icon: &str) -> String {
     format!(
         "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/svg/emoji_u{}.svg",
-        get_utf8_code(icon)
+        format!("{:04x}", icon.chars().nth(0).unwrap_or('❌') as u32)
     )
 }
 
@@ -225,6 +250,11 @@ async fn async_main() -> Result<()> {
     .await?;
     println!("Connected!");
 
+    let channel_name = "ithueti";
+
+    let card_post_index: [usize; 4] = [0, 0, 0, 0];
+    let editor_choice_post_id = 10894;
+
     // If we can't save the session, sign out once we're done.
     let mut sign_out = false;
 
@@ -262,6 +292,8 @@ async fn async_main() -> Result<()> {
         }
     }
 
+    let working_dir = std::env::current_dir()?;
+
     // Obtain a `ClientHandle` to perform remote calls while `Client` drives the connection.
     //
     // This handle can be `clone()`'d around and freely moved into other tasks, so you can invoke
@@ -271,7 +303,19 @@ async fn async_main() -> Result<()> {
     // The design's annoying to use for trivial sequential tasks, but is otherwise scalable.
     let client_handle = client.clone();
 
-    let ithueti = client_handle.resolve_username("ithueti").await?.unwrap();
+    let ithueti: grammers_client::types::chat::Chat =
+        client_handle.resolve_username(channel_name).await?.unwrap();
+
+    let photo = ithueti.photo_downloadable(true);
+    match photo {
+        Some(photo) => {
+            let photo_out = working_dir.join("pic.png");
+            println!("Pic {}", photo_out.to_str().unwrap());
+            client_handle.download_media(&photo, photo_out).await?;
+        }
+        _ => {}
+    }
+
     let mut messages = client_handle.iter_messages(ithueti).limit(500);
     let current_date = DateTime::<Utc>::from_timestamp(Local::now().timestamp(), 0).unwrap();
     let week_ago = current_date - chrono::Duration::days(8);
@@ -283,98 +327,61 @@ async fn async_main() -> Result<()> {
     let post_top = TopPost::<3>::get_top(&mut posts);
     post_top.print();
 
-    let card_post_index: [usize; 4] = [2, 2, 1, 2];
-    let editor_choice_post_id = 10845;
-
-    fn create_cards<F>(posts: &Vec<Post>, count: F) -> Vec<WidgetData>
-    where
-        F: Fn(&Post) -> i32,
-    {
-        posts
-            .iter()
-            .map(|p| WidgetData {
-                id: p.id,
-                count: count(p),
-            })
-            .collect()
-    }
-
-    let default_block = Block {
-        header: String::from("UNDEFINED"),
-        icon: icon_url('❌'),
-        use_filter: false,
-        filter: String::from(""),
-        cards: vec![],
-    };
-
+    let get_posts = |action: ActionType| post_top.index(action);
     let blocks = vec![
         Block {
             header: String::from("По комментариям"),
-            icon: icon_url('💬'),
-            cards: create_cards(&post_top.replies, |p: &Post| p.replies),
-            ..default_block.clone()
+            icon: icon_url("💬"),
+            cards: Card::create_cards(get_posts(ActionType::Replies), ActionType::Replies),
+            ..Block::default()
         },
         Block {
             header: String::from("По реакциям"),
-            icon: icon_url('👏'),
-            cards: create_cards(&post_top.reactions, |p: &Post| p.reactions),
-            ..default_block
+            icon: icon_url("👏"),
+            cards: Card::create_cards(get_posts(ActionType::Reactions), ActionType::Reactions),
+            ..Block::default()
         },
         Block {
             header: String::from("По репостам"),
-            icon: icon_url('🔁'),
+            icon: icon_url("🔁"),
             use_filter: true,
             filter: String::from("filter-blue"),
-            cards: create_cards(&post_top.forwards, |p: &Post| p.forwards),
+            cards: Card::create_cards(get_posts(ActionType::Forwards), ActionType::Forwards),
         },
         Block {
             header: String::from("По просмотрам"),
-            icon: icon_url('👁'),
+            icon: icon_url("👁️"),
             use_filter: true,
             filter: String::from("filter-blue"),
-            cards: create_cards(&post_top.views, |p: &Post| p.views),
+            cards: Card::create_cards(get_posts(ActionType::Views), ActionType::Views),
         },
     ];
 
-    let default_card = CardData {
-        id: -1,
-        header: String::from("UNDEFINED"),
-        icon: icon_url('❌'),
-        use_filter: false,
-        filter: String::from(""),
-        count: -1,
-    };
-
+    let get_post = |action: ActionType| &post_top.index(action)[card_post_index[action as usize]];
     let cards = vec![
-        CardData {
-            id: post_top.replies[card_post_index[0]].id,
+        Card {
             header: String::from("Лучший по комментариям"),
-            icon: icon_url('💬'),
-            count: post_top.replies[card_post_index[0]].replies,
-            ..default_card.clone()
+            icon: icon_url("💬"),
+            ..Card::create_card(get_post(ActionType::Replies), ActionType::Replies)
         },
-        CardData {
-            id: post_top.reactions[card_post_index[1]].id,
+        Card {
             header: String::from("Лучший по реакциям"),
-            icon: icon_url('👏'),
-            count: post_top.reactions[card_post_index[1]].reactions,
-            ..default_card
+            icon: icon_url("👏"),
+            ..Card::create_card(get_post(ActionType::Reactions), ActionType::Reactions)
         },
-        CardData {
-            id: post_top.forwards[card_post_index[2]].id,
+        Card {
             header: String::from("Лучший по репостам"),
-            icon: icon_url('🔁'),
+            icon: icon_url("🔁"),
             use_filter: true,
             filter: String::from("filter-blue"),
-            count: post_top.forwards[card_post_index[2]].forwards,
+            ..Card::create_card(get_post(ActionType::Forwards), ActionType::Forwards)
         },
-        CardData {
-            id: post_top.views[card_post_index[3]].id,
+        Card {
             header: String::from("Лучший по просмотрам"),
-            icon: icon_url('👁'),
+            icon: icon_url("👁️"),
             use_filter: true,
             filter: String::from("filter-blue"),
-            count: post_top.views[card_post_index[3]].views,
+            ..Card::create_card(get_post(ActionType::Views), ActionType::Views)
         },
     ];
 
@@ -382,17 +389,16 @@ async fn async_main() -> Result<()> {
 
     // Digest rendering
 
-    let dir = std::env::current_dir()?;
-
     let mut tera = Tera::default();
 
-    let digest_template = dir.join("digest_template.html");
+    let digest_template = working_dir.join("digest_template.html");
     tera.add_template_file(digest_template, Some("digest.html"))
         .unwrap();
 
     let mut digest_context = tera::Context::new();
     digest_context.insert("blocks", &blocks);
     digest_context.insert("editor_choice_id", &editor_choice_post_id);
+    digest_context.insert("channel_name", &channel_name);
 
     let rendered = tera.render("digest.html", &digest_context).unwrap();
 
@@ -401,13 +407,14 @@ async fn async_main() -> Result<()> {
 
     // Card rendering
 
-    let render_template = dir.join("render_template.html");
+    let render_template = working_dir.join("render_template.html");
     tera.add_template_file(render_template, Some("render.html"))
         .unwrap();
 
     let mut render_context = tera::Context::new();
     render_context.insert("cards", &cards);
     render_context.insert("editor_choice_id", &editor_choice_post_id);
+    render_context.insert("channel_name", &channel_name);
 
     let rendered = tera.render("render.html", &render_context).unwrap();
 
@@ -444,7 +451,7 @@ async fn async_main() -> Result<()> {
     });
 
     // create a new browser page and navigate to the url
-    let render_page_path = dir.join("render.html");
+    let render_page_path = working_dir.join("render.html");
     let render_page = render_page_path.to_str().unwrap();
     let page = browser.new_page(format!("file://{render_page}")).await?;
 
