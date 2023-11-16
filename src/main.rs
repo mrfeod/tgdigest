@@ -253,7 +253,7 @@ async fn async_main() -> Result<()> {
     let channel_name = "ithueti";
 
     let card_post_index: [usize; 4] = [0, 0, 0, 0];
-    let editor_choice_post_id = 10894;
+    let editor_choice_post_id = -1;
 
     // If we can't save the session, sign out once we're done.
     let mut sign_out = false;

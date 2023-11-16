@@ -58,8 +58,8 @@
                 <tr>
                     <th><img src="pic.png" height="0" /></th>
                     <th>
-                        <h2>{{ card.header }} <img {% if card.use_filter %} class="{{ card.filter }}" {% endif %}
-                                src="{{ card.icon }}" height="0" /> {{ card.count }}</h2>
+                        <h2>{{ card.header }} <img class="{{ card.filter }}" src="{{ card.icon }}" height="0" /> {{
+                            card.count }}</h2>
                     </th>
                 </tr>
             </thead>
@@ -70,6 +70,7 @@
             data-color="343638" data-dark-color="FFFFFF"></script>
     </div>
     {% endfor %}
+    {% if editor_choice_id > 0 %}
     <div>
         <table>
             <thead>
@@ -88,6 +89,7 @@
             data-telegram-post="{{ channel_name }}/{{ editor_choice_id }}" data-width="100%" data-userpic="false"
             data-color="343638" data-dark-color="FFFFFF"></script>
     </div>
+    {% endif %}
     <script>
         window.addEventListener('load', function () {
             var icons = document.getElementsByTagName("img");
