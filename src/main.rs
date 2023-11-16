@@ -1,6 +1,7 @@
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chrono::{DateTime, Local, Utc};
+use clap::{Parser, Subcommand};
 use futures_util::stream::StreamExt;
 use grammers_client::{Client, Config, SignInError};
 use grammers_session::Session;
@@ -154,22 +155,20 @@ impl<const N: usize> TopPost<N> {
 #[derive(Clone, serde::Serialize)]
 struct Card {
     id: i32,
+    count: i32,
     header: String,
     icon: String,
-    use_filter: bool,
     filter: String,
-    count: i32,
 }
 
 impl Card {
     fn default() -> Self {
         Card {
             id: -1,
+            count: -1,
             header: String::from("UNDEFINED"),
             icon: icon_url("⚠️"),
-            use_filter: false,
             filter: String::from(""),
-            count: -1,
         }
     }
 
@@ -190,7 +189,6 @@ impl Card {
 struct Block {
     header: String,
     icon: String,
-    use_filter: bool,
     filter: String,
     cards: Vec<Card>,
 }
@@ -200,11 +198,49 @@ impl Block {
         Block {
             header: String::from("UNDEFINED"),
             icon: icon_url("⚠️"),
-            use_filter: false,
             filter: String::from(""),
             cards: vec![],
         }
     }
+}
+
+#[derive(Parser)]
+#[command(name = "tgdigest")]
+#[command(author = "Anton Sosnin <antsosnin@yandex.ru>")]
+#[command(version = "0.5")]
+#[command(about = "Create digest for your telegram channel", long_about = None)]
+struct Cli {
+    #[arg(short, long)]
+    digest: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    #[arg(long, default_value_t = 3)]
+    top_count: u32,
+
+    channel_name: String,
+
+    // card_indeces: [usize; 4],
+    #[arg(short, long, default_value_t = -1)]
+    editor_choice_post_id: i32,
+
+    #[arg(short, long)]
+    from_date: Option<DateTime<Utc>>,
+
+    #[arg(short, long)]
+    to_date: Option<DateTime<Utc>>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Generate cards from chosen digest posts from 1 to <TOP_COUNT>
+    Cards {
+        replies: usize,
+        reactions: usize,
+        forwards: usize,
+        views: usize,
+    },
 }
 
 fn icon_url(icon: &str) -> String {
@@ -229,6 +265,14 @@ fn prompt(message: &str) -> Result<String> {
 }
 
 async fn async_main() -> Result<()> {
+    let cli = Cli::parse();
+
+    let current_date = DateTime::<Utc>::from_timestamp(Local::now().timestamp(), 0).unwrap();
+    let week_ago = current_date - chrono::Duration::days(7);
+
+    let from_date = cli.from_date.unwrap_or(week_ago);
+    let to_date = cli.to_date.unwrap_or(current_date);
+
     SimpleLogger::new()
         .with_level(log::LevelFilter::Debug)
         .init()
@@ -249,11 +293,6 @@ async fn async_main() -> Result<()> {
     })
     .await?;
     println!("Connected!");
-
-    let channel_name = "ithueti";
-
-    let card_post_index: [usize; 4] = [0, 0, 0, 0];
-    let editor_choice_post_id = -1;
 
     // If we can't save the session, sign out once we're done.
     let mut sign_out = false;
@@ -303,8 +342,10 @@ async fn async_main() -> Result<()> {
     // The design's annoying to use for trivial sequential tasks, but is otherwise scalable.
     let client_handle = client.clone();
 
-    let ithueti: grammers_client::types::chat::Chat =
-        client_handle.resolve_username(channel_name).await?.unwrap();
+    let ithueti: grammers_client::types::chat::Chat = client_handle
+        .resolve_username(cli.channel_name.as_str())
+        .await?
+        .unwrap();
 
     let photo = ithueti.photo_downloadable(true);
     match photo {
@@ -317,77 +358,17 @@ async fn async_main() -> Result<()> {
     }
 
     let mut messages = client_handle.iter_messages(ithueti).limit(500);
-    let current_date = DateTime::<Utc>::from_timestamp(Local::now().timestamp(), 0).unwrap();
-    let week_ago = current_date - chrono::Duration::days(8);
-    println!("Now {current_date}");
-    println!("8 days ago {week_ago}");
-
-    let mut posts = Post::get_by_date(&mut messages, week_ago, current_date).await?;
+    let mut posts = Post::get_by_date(&mut messages, from_date, to_date).await?;
 
     let post_top = TopPost::<3>::get_top(&mut posts);
+    println!(
+        "Fetched data for https://t.me/{} from {from_date} to {to_date}",
+        cli.channel_name
+    );
+
     post_top.print();
 
-    let get_posts = |action: ActionType| post_top.index(action);
-    let blocks = vec![
-        Block {
-            header: String::from("По комментариям"),
-            icon: icon_url("💬"),
-            cards: Card::create_cards(get_posts(ActionType::Replies), ActionType::Replies),
-            ..Block::default()
-        },
-        Block {
-            header: String::from("По реакциям"),
-            icon: icon_url("👏"),
-            cards: Card::create_cards(get_posts(ActionType::Reactions), ActionType::Reactions),
-            ..Block::default()
-        },
-        Block {
-            header: String::from("По репостам"),
-            icon: icon_url("🔁"),
-            use_filter: true,
-            filter: String::from("filter-blue"),
-            cards: Card::create_cards(get_posts(ActionType::Forwards), ActionType::Forwards),
-        },
-        Block {
-            header: String::from("По просмотрам"),
-            icon: icon_url("👁️"),
-            use_filter: true,
-            filter: String::from("filter-blue"),
-            cards: Card::create_cards(get_posts(ActionType::Views), ActionType::Views),
-        },
-    ];
-
-    let get_post = |action: ActionType| &post_top.index(action)[card_post_index[action as usize]];
-    let cards = vec![
-        Card {
-            header: String::from("Лучший по комментариям"),
-            icon: icon_url("💬"),
-            ..Card::create_card(get_post(ActionType::Replies), ActionType::Replies)
-        },
-        Card {
-            header: String::from("Лучший по реакциям"),
-            icon: icon_url("👏"),
-            ..Card::create_card(get_post(ActionType::Reactions), ActionType::Reactions)
-        },
-        Card {
-            header: String::from("Лучший по репостам"),
-            icon: icon_url("🔁"),
-            use_filter: true,
-            filter: String::from("filter-blue"),
-            ..Card::create_card(get_post(ActionType::Forwards), ActionType::Forwards)
-        },
-        Card {
-            header: String::from("Лучший по просмотрам"),
-            icon: icon_url("👁️"),
-            use_filter: true,
-            filter: String::from("filter-blue"),
-            ..Card::create_card(get_post(ActionType::Views), ActionType::Views)
-        },
-    ];
-
     // Template part
-
-    // Digest rendering
 
     let mut tera = Tera::default();
 
@@ -395,82 +376,161 @@ async fn async_main() -> Result<()> {
     tera.add_template_file(digest_template, Some("digest.html"))
         .unwrap();
 
-    let mut digest_context = tera::Context::new();
-    digest_context.insert("blocks", &blocks);
-    digest_context.insert("editor_choice_id", &editor_choice_post_id);
-    digest_context.insert("channel_name", &channel_name);
-
-    let rendered = tera.render("digest.html", &digest_context).unwrap();
-
-    let mut file = fs::File::create("digest.html")?;
-    file.write_all(rendered.as_bytes())?;
-
-    // Card rendering
-
     let render_template = working_dir.join("render_template.html");
     tera.add_template_file(render_template, Some("render.html"))
         .unwrap();
 
-    let mut render_context = tera::Context::new();
-    render_context.insert("cards", &cards);
-    render_context.insert("editor_choice_id", &editor_choice_post_id);
-    render_context.insert("channel_name", &channel_name);
+    // Digest part
 
-    let rendered = tera.render("render.html", &render_context).unwrap();
+    if cli.digest {
+        println!("Creating digest.html");
 
-    let mut file = fs::File::create("render.html")?;
-    file.write_all(rendered.as_bytes())?;
+        let get_posts = |action: ActionType| post_top.index(action);
+        let blocks = vec![
+            Block {
+                header: String::from("По комментариям"),
+                icon: icon_url("💬"),
+                cards: Card::create_cards(get_posts(ActionType::Replies), ActionType::Replies),
+                ..Block::default()
+            },
+            Block {
+                header: String::from("По реакциям"),
+                icon: icon_url("👏"),
+                cards: Card::create_cards(get_posts(ActionType::Reactions), ActionType::Reactions),
+                ..Block::default()
+            },
+            Block {
+                header: String::from("По репостам"),
+                icon: icon_url("🔁"),
+                filter: String::from("filter-blue"),
+                cards: Card::create_cards(get_posts(ActionType::Forwards), ActionType::Forwards),
+            },
+            Block {
+                header: String::from("По просмотрам"),
+                icon: icon_url("👁️"),
+                filter: String::from("filter-blue"),
+                cards: Card::create_cards(get_posts(ActionType::Views), ActionType::Views),
+            },
+        ];
 
-    // Browser part
+        // Digest rendering
 
-    let viewport = chromiumoxide::handler::viewport::Viewport {
-        width: 2000,
-        height: 30000,
-        device_scale_factor: Some(1.0),
-        emulating_mobile: false,
-        is_landscape: false,
-        has_touch: false,
-    };
+        let mut digest_context = tera::Context::new();
+        digest_context.insert("blocks", &blocks);
+        digest_context.insert("editor_choice_id", &cli.editor_choice_post_id);
+        digest_context.insert("channel_name", &cli.channel_name.as_str());
 
-    let (mut browser, mut handler) = Browser::launch(
-        BrowserConfig::builder()
-            .with_head()
-            .window_size(2000, 30000)
-            .viewport(viewport)
-            .build()?,
-    )
-    .await?;
+        let rendered = tera.render("digest.html", &digest_context).unwrap();
 
-    // spawn a new task that continuously polls the handler
-    let handle: tokio::task::JoinHandle<()> = tokio::task::spawn(async move {
-        while let Some(h) = handler.next().await {
-            if h.is_err() {
-                break;
-            }
-        }
-    });
-
-    // create a new browser page and navigate to the url
-    let render_page_path = working_dir.join("render.html");
-    let render_page = render_page_path.to_str().unwrap();
-    let page = browser.new_page(format!("file://{render_page}")).await?;
-
-    sleep(Duration::from_secs(3)).await;
-
-    // find the search bar type into the search field and hit `Enter`,
-    // this triggers a new navigation to the search result page
-    let cards = page.find_elements("div").await?;
-
-    // page.bring_to_front().await?;
-    for (i, card) in cards.iter().enumerate() {
-        // card.focus().await?.scroll_into_view().await?;
-        let _ = card
-            .save_screenshot(CaptureScreenshotFormat::Png, format!("card_{:02}.png", i))
-            .await?;
+        let mut file = fs::File::create("digest.html")?;
+        file.write_all(rendered.as_bytes())?;
     }
 
-    browser.close().await?;
-    let _ = handle.await;
+    // Rendering part
+
+    match &cli.command {
+        Some(Commands::Cards {
+            replies,
+            reactions,
+            forwards,
+            views,
+        }) => {
+            println!("Creating render.html and *.png cards");
+
+            let card_post_index = [*replies - 1, *reactions - 1, *forwards - 1, *views - 1];
+
+            let get_post =
+                |action: ActionType| &post_top.index(action)[card_post_index[action as usize]];
+            let cards = vec![
+                Card {
+                    header: String::from("Лучший по комментариям"),
+                    icon: icon_url("💬"),
+                    ..Card::create_card(get_post(ActionType::Replies), ActionType::Replies)
+                },
+                Card {
+                    header: String::from("Лучший по реакциям"),
+                    icon: icon_url("👏"),
+                    ..Card::create_card(get_post(ActionType::Reactions), ActionType::Reactions)
+                },
+                Card {
+                    header: String::from("Лучший по репостам"),
+                    icon: icon_url("🔁"),
+                    filter: String::from("filter-blue"),
+                    ..Card::create_card(get_post(ActionType::Forwards), ActionType::Forwards)
+                },
+                Card {
+                    header: String::from("Лучший по просмотрам"),
+                    icon: icon_url("👁️"),
+                    filter: String::from("filter-blue"),
+                    ..Card::create_card(get_post(ActionType::Views), ActionType::Views)
+                },
+            ];
+
+            // Card rendering
+
+            let mut render_context = tera::Context::new();
+            render_context.insert("cards", &cards);
+            render_context.insert("editor_choice_id", &cli.editor_choice_post_id);
+            render_context.insert("channel_name", &cli.channel_name.as_str());
+
+            let rendered = tera.render("render.html", &render_context).unwrap();
+
+            let mut file = fs::File::create("render.html")?;
+            file.write_all(rendered.as_bytes())?;
+
+            // Browser part
+
+            let viewport = chromiumoxide::handler::viewport::Viewport {
+                width: 2000,
+                height: 30000,
+                device_scale_factor: Some(1.0),
+                emulating_mobile: false,
+                is_landscape: false,
+                has_touch: false,
+            };
+
+            let (mut browser, mut handler) = Browser::launch(
+                BrowserConfig::builder()
+                    .with_head()
+                    .window_size(2000, 30000)
+                    .viewport(viewport)
+                    .build()?,
+            )
+            .await?;
+
+            // spawn a new task that continuously polls the handler
+            let handle: tokio::task::JoinHandle<()> = tokio::task::spawn(async move {
+                while let Some(h) = handler.next().await {
+                    if h.is_err() {
+                        break;
+                    }
+                }
+            });
+
+            // create a new browser page and navigate to the url
+            let render_page_path = working_dir.join("render.html");
+            let render_page = render_page_path.to_str().unwrap();
+            let page = browser.new_page(format!("file://{render_page}")).await?;
+
+            sleep(Duration::from_secs(3)).await;
+
+            // find the search bar type into the search field and hit `Enter`,
+            // this triggers a new navigation to the search result page
+            let cards = page.find_elements("div").await?;
+
+            // page.bring_to_front().await?;
+            for (i, card) in cards.iter().enumerate() {
+                // card.focus().await?.scroll_into_view().await?;
+                let _ = card
+                    .save_screenshot(CaptureScreenshotFormat::Png, format!("card_{:02}.png", i))
+                    .await?;
+            }
+
+            browser.close().await?;
+            let _ = handle.await;
+        }
+        _ => {}
+    }
 
     // End
 
