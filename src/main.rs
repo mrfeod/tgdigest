@@ -43,10 +43,10 @@ impl ActionType {
 pub struct Post {
     date: i64,
     id: i32,
-    views: i32,
-    forwards: i32,
-    replies: i32,
-    reactions: i32,
+    views: Option<i32>,
+    forwards: Option<i32>,
+    replies: Option<i32>,
+    reactions: Option<i32>,
 }
 
 impl Post {
@@ -56,7 +56,6 @@ impl Post {
         to_date: DateTime<Utc>,
     ) -> Result<Vec<Post>> {
         let mut posts: Vec<Post> = Vec::new();
-
         while let Some(message) = messages.next().await? {
             let message: grammers_client::types::Message = message;
 
@@ -72,17 +71,17 @@ impl Post {
             posts.push(Post {
                 date: date.timestamp(),
                 id: message.id(),
-                views: message.view_count().unwrap_or(-1),
-                forwards: message.forward_count().unwrap_or(-1),
-                replies: message.reply_count().unwrap_or(-1),
-                reactions: message.reaction_count().unwrap_or(-1),
+                views: message.view_count(),
+                forwards: message.forward_count(),
+                replies: message.reply_count(),
+                reactions: message.reaction_count(),
             });
         }
 
         Result::Ok(posts)
     }
 
-    fn count(&self, index: ActionType) -> i32 {
+    fn count(&self, index: ActionType) -> Option<i32> {
         match index {
             ActionType::Replies => self.replies,
             ActionType::Reactions => self.reactions,
@@ -141,13 +140,21 @@ impl TopPost {
             println!("{header}");
             let action = ActionType::from(index);
             for (pos, post) in self.index(action).iter().enumerate() {
-                println!(
-                    "\t{}. {}: {}\t({})",
-                    pos + 1,
-                    post.id,
-                    post.count(action),
-                    DateTime::<Utc>::from_timestamp(post.date, 0).unwrap()
-                );
+                match post.count(action) {
+                    Some(count) => {
+                        println!(
+                            "\t{}. {}: {}\t({})",
+                            pos + 1,
+                            post.id,
+                            count,
+                            DateTime::<Utc>::from_timestamp(post.date, 0).unwrap()
+                        );
+                    }
+                    None => {
+                        println!("No data");
+                        break;
+                    }
+                }
             }
             println!("");
         }
@@ -157,7 +164,7 @@ impl TopPost {
 #[derive(Clone, serde::Serialize)]
 struct Card {
     id: i32,
-    count: i32,
+    count: Option<i32>,
     header: String,
     icon: String,
     filter: String,
@@ -167,7 +174,7 @@ impl Card {
     fn default() -> Self {
         Card {
             id: -1,
-            count: -1,
+            count: None,
             header: String::from("UNDEFINED"),
             icon: icon_url("⚠️"),
             filter: String::from(""),
@@ -183,7 +190,11 @@ impl Card {
     }
 
     fn create_cards(posts: &Vec<Post>, action: ActionType) -> Vec<Card> {
-        posts.iter().map(|p| Card::create_card(p, action)).collect()
+        posts
+            .iter()
+            .map(|p| Card::create_card(p, action))
+            .filter(|c| c.count.is_some())
+            .collect()
     }
 }
 
@@ -359,7 +370,10 @@ async fn async_main() -> Result<()> {
         _ => {}
     }
 
-    let mut messages = client_handle.iter_messages(ithueti).limit(50000);
+    let mut messages = client_handle
+        .iter_messages(ithueti)
+        .max_date(to_date.timestamp() as i32)
+        .limit(50000);
     let mut posts = Post::get_by_date(&mut messages, from_date, to_date).await?;
 
     let post_top = TopPost::get_top(cli.top_count, &mut posts);
@@ -467,6 +481,7 @@ async fn async_main() -> Result<()> {
                     ..Card::create_card(get_post(ActionType::Views), ActionType::Views)
                 },
             ];
+            let cards: Vec<Card> = cards.into_iter().filter(|c| c.count.is_some()).collect();
 
             // Card rendering
 
@@ -522,7 +537,8 @@ async fn async_main() -> Result<()> {
 
             // page.bring_to_front().await?;
             for (i, card) in cards.iter().enumerate() {
-                // card.focus().await?.scroll_into_view().await?;
+                card.focus().await?.scroll_into_view().await?;
+                sleep(Duration::from_secs(1)).await;
                 let _ = card
                     .save_screenshot(CaptureScreenshotFormat::Png, format!("card_{:02}.png", i))
                     .await?;
