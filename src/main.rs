@@ -508,7 +508,6 @@ async fn async_main() -> Result<()> {
 
             let (mut browser, mut handler) = Browser::launch(
                 BrowserConfig::builder()
-                    .with_head()
                     .window_size(2000, 30000)
                     .viewport(viewport)
                     .build()?,
