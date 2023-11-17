@@ -93,29 +93,31 @@ impl Post {
 }
 
 #[derive(serde::Serialize)]
-struct TopPost<const N: usize> {
+struct TopPost {
+    top_count: usize,
     replies: Vec<Post>,
     reactions: Vec<Post>,
     forwards: Vec<Post>,
     views: Vec<Post>,
 }
 
-impl<const N: usize> TopPost<N> {
-    fn get_top_by(posts: &mut Vec<Post>, action: ActionType) -> Vec<Post> {
-        if posts.len() < N {
-            panic!("Size of posts less than {N}")
+impl TopPost {
+    fn get_top_by(top_count: usize, posts: &mut Vec<Post>, action: ActionType) -> Vec<Post> {
+        if posts.len() < top_count {
+            panic!("Size of posts less than {}", top_count)
         }
 
-        posts.partial_sort(N, |a, b| b.count(action).cmp(&a.count(action)));
-        posts[0..N].to_vec()
+        posts.partial_sort(top_count, |a, b| b.count(action).cmp(&a.count(action)));
+        posts[0..top_count].to_vec()
     }
 
-    fn get_top(posts: &mut Vec<Post>) -> TopPost<N> {
+    fn get_top(top_count: usize, posts: &mut Vec<Post>) -> TopPost {
         TopPost {
-            replies: Self::get_top_by(posts, ActionType::Replies),
-            reactions: Self::get_top_by(posts, ActionType::Reactions),
-            forwards: Self::get_top_by(posts, ActionType::Forwards),
-            views: Self::get_top_by(posts, ActionType::Views),
+            top_count,
+            replies: Self::get_top_by(top_count, posts, ActionType::Replies),
+            reactions: Self::get_top_by(top_count, posts, ActionType::Reactions),
+            forwards: Self::get_top_by(top_count, posts, ActionType::Forwards),
+            views: Self::get_top_by(top_count, posts, ActionType::Views),
         }
     }
 
@@ -130,10 +132,10 @@ impl<const N: usize> TopPost<N> {
 
     fn print(&self) {
         let headers = [
-            format!("Top {N} by comments:"),
-            format!("Top {N} by reactions:"),
-            format!("Top {N} by forwards:"),
-            format!("Top {N} by views:"),
+            format!("Top {} by comments:", self.top_count),
+            format!("Top {} by reactions:", self.top_count),
+            format!("Top {} by forwards:", self.top_count),
+            format!("Top {} by views:", self.top_count),
         ];
         for (index, header) in headers.iter().enumerate() {
             println!("{header}");
@@ -217,7 +219,7 @@ struct Cli {
     command: Option<Commands>,
 
     #[arg(long, default_value_t = 3)]
-    top_count: u32,
+    top_count: usize,
 
     channel_name: String,
 
@@ -357,10 +359,10 @@ async fn async_main() -> Result<()> {
         _ => {}
     }
 
-    let mut messages = client_handle.iter_messages(ithueti).limit(500);
+    let mut messages = client_handle.iter_messages(ithueti).limit(50000);
     let mut posts = Post::get_by_date(&mut messages, from_date, to_date).await?;
 
-    let post_top = TopPost::<3>::get_top(&mut posts);
+    let post_top = TopPost::get_top(cli.top_count, &mut posts);
     println!(
         "Fetched data for https://t.me/{} from {from_date} to {to_date}",
         cli.channel_name
