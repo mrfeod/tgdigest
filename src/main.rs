@@ -189,12 +189,16 @@ impl Card {
         }
     }
 
-    fn create_cards(posts: &Vec<Post>, action: ActionType) -> Vec<Card> {
-        posts
+    fn create_cards(posts: &Vec<Post>, action: ActionType) -> Option<Vec<Card>> {
+        match posts
             .iter()
             .map(|p| Card::create_card(p, action))
             .filter(|c| c.count.is_some())
-            .collect()
+            .collect::<Vec<Card>>()
+        {
+            cards if !cards.is_empty() => Some(cards),
+            _ => None,
+        }
     }
 }
 
@@ -203,7 +207,7 @@ struct Block {
     header: String,
     icon: String,
     filter: String,
-    cards: Vec<Card>,
+    cards: Option<Vec<Card>>,
 }
 
 impl Block {
@@ -212,7 +216,7 @@ impl Block {
             header: String::from("UNDEFINED"),
             icon: icon_url("⚠️"),
             filter: String::from(""),
-            cards: vec![],
+            cards: None,
         }
     }
 }
@@ -440,7 +444,10 @@ async fn async_main() -> Result<()> {
                 filter: String::from("filter-blue"),
                 cards: Card::create_cards(get_posts(ActionType::Views), ActionType::Views),
             },
-        ];
+        ]
+        .into_iter()
+        .filter(|b| b.cards.is_some())
+        .collect::<Vec<Block>>();
 
         // Digest rendering
 
@@ -451,7 +458,7 @@ async fn async_main() -> Result<()> {
 
         let rendered = tera.render("digest.html", &digest_context).unwrap();
 
-        let digest_page_path = output_dir.join("render.html");
+        let digest_page_path = output_dir.join("digest.html");
         let mut file = fs::File::create(digest_page_path)?;
         file.write_all(rendered.as_bytes())?;
     }
