@@ -17,7 +17,7 @@ use tokio::time::Duration;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const SESSION_FILE: &str = "dialogs.session";
+const SESSION_FILE: &str = "tgdigest.session";
 
 #[derive(Copy, Clone)]
 enum ActionType {
@@ -224,18 +224,29 @@ impl Block {
 #[command(about = "Create digest for your telegram channel", long_about = None)]
 struct Cli {
     #[arg(short, long)]
+    /// Directory with tgdigest.session file and html templates, default is working directory
+    input_dir: Option<std::path::PathBuf>,
+
+    #[arg(short, long)]
+    /// Directory to write all the program artifacts, default is working directory
+    output_dir: Option<std::path::PathBuf>,
+
+    #[arg(short, long)]
+    /// Generate digest.html
     digest: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
 
     #[arg(long, default_value_t = 3)]
+    /// Count of posts in digest
     top_count: usize,
 
+    /// t.me/<CHANNEL_NAME>
     channel_name: String,
 
-    // card_indeces: [usize; 4],
     #[arg(short, long, default_value_t = -1)]
+    /// The id of the post to place it in "Editor choice" block
     editor_choice_post_id: i32,
 
     #[arg(short, long)]
@@ -286,6 +297,10 @@ async fn async_main() -> Result<()> {
     let from_date = cli.from_date.unwrap_or(week_ago);
     let to_date = cli.to_date.unwrap_or(current_date);
 
+    let working_dir = std::env::current_dir()?;
+    let input_dir = cli.input_dir.unwrap_or(working_dir.clone());
+    let output_dir = cli.output_dir.unwrap_or(working_dir.clone());
+
     SimpleLogger::new()
         .with_level(log::LevelFilter::Debug)
         .init()
@@ -299,7 +314,7 @@ async fn async_main() -> Result<()> {
 
     println!("Connecting to Telegram...");
     let client = Client::connect(Config {
-        session: Session::load_file_or_create(SESSION_FILE)?,
+        session: Session::load_file_or_create(input_dir.join(SESSION_FILE))?,
         api_id,
         api_hash: api_hash.clone(),
         params: Default::default(),
@@ -332,7 +347,7 @@ async fn async_main() -> Result<()> {
             Err(e) => panic!("{}", e),
         };
         println!("Signed in!");
-        match client.session().save_to_file(SESSION_FILE) {
+        match client.session().save_to_file(input_dir.join(SESSION_FILE)) {
             Ok(_) => {}
             Err(e) => {
                 println!(
@@ -343,8 +358,6 @@ async fn async_main() -> Result<()> {
             }
         }
     }
-
-    let working_dir = std::env::current_dir()?;
 
     // Obtain a `ClientHandle` to perform remote calls while `Client` drives the connection.
     //
@@ -363,7 +376,7 @@ async fn async_main() -> Result<()> {
     let photo = ithueti.photo_downloadable(true);
     match photo {
         Some(photo) => {
-            let photo_out = working_dir.join("pic.png");
+            let photo_out = output_dir.join("pic.png");
             println!("Pic {}", photo_out.to_str().unwrap());
             client_handle.download_media(&photo, photo_out).await?;
         }
@@ -388,11 +401,11 @@ async fn async_main() -> Result<()> {
 
     let mut tera = Tera::default();
 
-    let digest_template = working_dir.join("digest_template.html");
+    let digest_template = input_dir.join("digest_template.html");
     tera.add_template_file(digest_template, Some("digest.html"))
         .unwrap();
 
-    let render_template = working_dir.join("render_template.html");
+    let render_template = input_dir.join("render_template.html");
     tera.add_template_file(render_template, Some("render.html"))
         .unwrap();
 
@@ -438,7 +451,8 @@ async fn async_main() -> Result<()> {
 
         let rendered = tera.render("digest.html", &digest_context).unwrap();
 
-        let mut file = fs::File::create("digest.html")?;
+        let digest_page_path = output_dir.join("render.html");
+        let mut file = fs::File::create(digest_page_path)?;
         file.write_all(rendered.as_bytes())?;
     }
 
@@ -492,7 +506,8 @@ async fn async_main() -> Result<()> {
 
             let rendered = tera.render("render.html", &render_context).unwrap();
 
-            let mut file = fs::File::create("render.html")?;
+            let render_page_path = output_dir.join("render.html").canonicalize().unwrap();
+            let mut file = fs::File::create(&render_page_path)?;
             file.write_all(rendered.as_bytes())?;
 
             // Browser part
@@ -524,9 +539,17 @@ async fn async_main() -> Result<()> {
             });
 
             // create a new browser page and navigate to the url
-            let render_page_path = working_dir.join("render.html");
             let render_page = render_page_path.to_str().unwrap();
-            let page = browser.new_page(format!("file://{render_page}")).await?;
+            // Garbage prefix on Windows: \\?\C:\...
+            let render_page_file = String::from("file://")
+                + || -> &str {
+                    if cfg!(windows) {
+                        return render_page.split_at(4).1;
+                    }
+                    render_page
+                }();
+            println!("Opening page for rendering: {render_page_file}");
+            let page = browser.new_page(render_page_file).await?;
 
             sleep(Duration::from_secs(3)).await;
 
@@ -538,9 +561,11 @@ async fn async_main() -> Result<()> {
             for (i, card) in cards.iter().enumerate() {
                 card.focus().await?.scroll_into_view().await?;
                 sleep(Duration::from_secs(1)).await;
+                let card_path = output_dir.join(format!("card_{:02}.png", i));
                 let _ = card
-                    .save_screenshot(CaptureScreenshotFormat::Png, format!("card_{:02}.png", i))
+                    .save_screenshot(CaptureScreenshotFormat::Png, &card_path)
                     .await?;
+                println!("Generated: {}", card_path.to_str().unwrap());
             }
 
             browser.close().await?;
