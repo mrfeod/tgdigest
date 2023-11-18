@@ -1,38 +1,38 @@
 # tgdigest
 
-<pre>
+```text
 > ./tgdigest.exe --help
 Create digest for your telegram channel
 
-<b>Usage: tgdigest.exe</b> [OPTIONS] <CHANNEL_NAME> [COMMAND]
+Usage: tgdigest.exe [OPTIONS] <CHANNEL_NAME> [COMMAND]
 
 Commands:
   cards  Generate cards from chosen digest posts from 1 to <TOP_COUNT>
   help   Print this message or the help of the given subcommand(s)
 
-<b>Arguments:</b>
+Arguments:
   <CHANNEL_NAME>  t.me/<CHANNEL_NAME>
 
-<b>Options:</b>
-  <b>-i, --input-dir</b> <INPUT_DIR>
+Options:
+  -i, --input-dir <INPUT_DIR>
           Directory with tgdigest.session file and html templates, default is working directory
-  <b>-o, --output-dir</b> <OUTPUT_DIR>
+  -o, --output-dir <OUTPUT_DIR>
           Directory to write all the program artifacts, default is working directory
-  <b>-d, --digest</b>
+  -d, --digest
           Generate digest.html
-      <b>--top-count</b> <TOP_COUNT>
+      --top-count <TOP_COUNT>
           Count of posts in digest [default: 3]
-  <b>-e, --editor-choice-post-id</b> <EDITOR_CHOICE_POST_ID>
+  -e, --editor-choice-post-id <EDITOR_CHOICE_POST_ID>
           The id of the post to place it in "Editor choice" block [default: -1]
-  <b>-f, --from-date</b> <FROM_DATE>
+  -f, --from-date <FROM_DATE>
 
-  <b>-t, --to-date</b> <TO_DATE>
+  -t, --to-date <TO_DATE>
 
-  <b>-h, --help</b>
+  -h, --help
           Print help
-  <b>-V, --version</b>
+  -V, --version
           Print version
-</pre>
+```
 
 # Typical usage
 The next commands do:
