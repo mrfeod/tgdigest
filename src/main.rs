@@ -15,6 +15,9 @@ use tokio::runtime;
 use tokio::time::sleep;
 use tokio::time::Duration;
 
+// Trait for extending std::path::PathBuf
+use path_slash::PathBufExt as _;
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const SESSION_FILE: &str = "tgdigest.session";
@@ -292,6 +295,125 @@ fn prompt(message: &str) -> Result<String> {
     Ok(line)
 }
 
+struct AppContext {
+    input_dir: std::path::PathBuf,
+    output_dir: std::path::PathBuf,
+}
+
+struct TelegramAPI {
+    client: grammers_client::client::Client,
+}
+
+impl TelegramAPI {
+    async fn create(ctx: &AppContext) -> Result<TelegramAPI> {
+        let api_id: i32 = std::env::var("TG_ID")
+            .expect(
+                "TG_ID env var is not set. Visit https://my.telegram.org/ if you don't have it.",
+            )
+            .parse()
+            .expect("TG_ID is not i32");
+        let api_hash = std::env::var("TG_HASH").expect(
+            "TG_HASH env var is not set. Visit https://my.telegram.org/ if you don't have it.",
+        );
+
+        println!("Connecting to Telegram...");
+        let session_file = ctx.input_dir.join(SESSION_FILE);
+        let session = match Session::load_file_or_create(&session_file) {
+            Ok(session) => session,
+            Err(why) => panic!(
+                "Can't load session file {}: {why}",
+                session_file.canonicalize().unwrap().to_str().unwrap()
+            ),
+        };
+        let client = Client::connect(Config {
+            session,
+            api_id,
+            api_hash,
+            params: Default::default(),
+        })
+        .await
+        .expect("Can't connect to Telegram");
+        println!("Connected!");
+
+        if !client.is_authorized().await.expect("Authorization error") {
+            println!("Signing in...");
+            let phone = prompt("Enter your phone number (international format): ")?;
+            let token = client.request_login_code(&phone).await?;
+            let code = prompt("Enter the code you received: ")?;
+            let signed_in = client.sign_in(&token, &code).await;
+            match signed_in {
+                Err(SignInError::PasswordRequired(password_token)) => {
+                    // Note: this `prompt` method will echo the password in the console.
+                    //       Real code might want to use a better way to handle this.
+                    let hint = password_token.hint().unwrap_or("None");
+                    let prompt_message = format!("Enter the password (hint {}): ", &hint);
+                    let password = prompt(prompt_message.as_str())?;
+
+                    client
+                        .check_password(password_token, password.trim())
+                        .await?;
+                }
+                Ok(_) => (),
+                Err(e) => panic!("{}", e),
+            };
+            println!("Signed in!");
+            match client
+                .session()
+                .save_to_file(ctx.input_dir.join(SESSION_FILE))
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("NOTE: failed to save the session {}", e);
+                }
+            }
+        }
+
+        Ok(TelegramAPI { client })
+    }
+
+    fn client(&self) -> grammers_client::client::Client {
+        // This handle can be `clone()`'d around and freely moved into other tasks, so you can invoke
+        // methods concurrently if you need to. While you do this, the single owned `client` is the
+        // one that communicates with the network.
+        self.client.clone()
+    }
+}
+
+fn handle_path(
+    input: Option<std::path::PathBuf>,
+    working_dir: &std::path::PathBuf,
+) -> Result<std::path::PathBuf> {
+    if working_dir.is_relative() {
+        return Err(format!(
+            "Working directory is not absolute: {}",
+            working_dir.to_str().unwrap_or("<not UTF-8 path>")
+        )
+        .into());
+    }
+
+    let path = match input {
+        Some(path) => working_dir.join(path),
+        _ => working_dir.clone(),
+    };
+
+    if !path.exists() {
+        return Err(format!(
+            "Path does not exist: {}",
+            path.to_str().unwrap_or("<not UTF-8 path>")
+        )
+        .into());
+    }
+
+    match path.to_slash() {
+        Some(slashed) => Ok(std::path::PathBuf::from(slashed.to_string())),
+        _ => Err(format!(
+            "Can't handle the path '{}'",
+            path.to_str().unwrap_or("<not UTF-8 path>")
+        )
+        .into()),
+    }
+}
+
 async fn async_main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -302,92 +424,39 @@ async fn async_main() -> Result<()> {
     let to_date = cli.to_date.unwrap_or(current_date);
 
     let working_dir = std::env::current_dir()?;
-    let input_dir = cli.input_dir.unwrap_or(working_dir.clone());
-    let output_dir = cli.output_dir.unwrap_or(working_dir.clone());
+    let input_dir = handle_path(cli.input_dir, &working_dir)?;
+    let output_dir = handle_path(cli.output_dir, &working_dir)?;
+
+    let ctx: AppContext = AppContext {
+        input_dir,
+        output_dir,
+    };
 
     SimpleLogger::new()
         .with_level(log::LevelFilter::Debug)
         .init()
         .unwrap();
 
-    let api_id: i32 = std::env::var("TG_ID")
-        .expect("TG_ID is not set")
-        .parse()
-        .expect("TG_ID is not i32");
-    let api_hash = std::env::var("TG_HASH").expect("TG_HASH is not set");
+    let tg = TelegramAPI::create(&ctx).await?;
+    let client = tg.client();
 
-    println!("Connecting to Telegram...");
-    let client = Client::connect(Config {
-        session: Session::load_file_or_create(input_dir.join(SESSION_FILE))?,
-        api_id,
-        api_hash: api_hash.clone(),
-        params: Default::default(),
-    })
-    .await?;
-    println!("Connected!");
-
-    // If we can't save the session, sign out once we're done.
-    let mut sign_out = false;
-
-    if !client.is_authorized().await? {
-        println!("Signing in...");
-        let phone = prompt("Enter your phone number (international format): ")?;
-        let token = client.request_login_code(&phone).await?;
-        let code = prompt("Enter the code you received: ")?;
-        let signed_in = client.sign_in(&token, &code).await;
-        match signed_in {
-            Err(SignInError::PasswordRequired(password_token)) => {
-                // Note: this `prompt` method will echo the password in the console.
-                //       Real code might want to use a better way to handle this.
-                let hint = password_token.hint().unwrap_or("None");
-                let prompt_message = format!("Enter the password (hint {}): ", &hint);
-                let password = prompt(prompt_message.as_str())?;
-
-                client
-                    .check_password(password_token, password.trim())
-                    .await?;
-            }
-            Ok(_) => (),
-            Err(e) => panic!("{}", e),
-        };
-        println!("Signed in!");
-        match client.session().save_to_file(input_dir.join(SESSION_FILE)) {
-            Ok(_) => {}
-            Err(e) => {
-                println!(
-                    "NOTE: failed to save the session, will sign out when done: {}",
-                    e
-                );
-                sign_out = true;
-            }
-        }
-    }
-
-    // Obtain a `ClientHandle` to perform remote calls while `Client` drives the connection.
-    //
-    // This handle can be `clone()`'d around and freely moved into other tasks, so you can invoke
-    // methods concurrently if you need to. While you do this, the single owned `client` is the
-    // one that communicates with the network.
-    //
-    // The design's annoying to use for trivial sequential tasks, but is otherwise scalable.
-    let client_handle = client.clone();
-
-    let ithueti: grammers_client::types::chat::Chat = client_handle
+    // LOAD CHAT
+    let ithueti: grammers_client::types::chat::Chat = client
         .resolve_username(cli.channel_name.as_str())
         .await?
         .unwrap();
-
     let photo = ithueti.photo_downloadable(true);
     match photo {
         Some(photo) => {
-            let photo_out = output_dir.join("pic.png");
+            let photo_out = ctx.output_dir.join("pic.png");
             println!("Pic {}", photo_out.to_str().unwrap());
-            client_handle.download_media(&photo, photo_out).await?;
+            client.download_media(&photo, photo_out).await?;
         }
         _ => {}
     }
 
-    let mut messages = client_handle
+    // GET MESSAGES
+    let mut messages = client
         .iter_messages(ithueti)
         .max_date(to_date.timestamp() as i32)
         .limit(50000);
@@ -405,11 +474,11 @@ async fn async_main() -> Result<()> {
 
     let mut tera = Tera::default();
 
-    let digest_template = input_dir.join("digest_template.html");
+    let digest_template = ctx.input_dir.join("digest_template.html");
     tera.add_template_file(digest_template, Some("digest.html"))
         .unwrap();
 
-    let render_template = input_dir.join("render_template.html");
+    let render_template = ctx.input_dir.join("render_template.html");
     tera.add_template_file(render_template, Some("render.html"))
         .unwrap();
 
@@ -458,7 +527,7 @@ async fn async_main() -> Result<()> {
 
         let rendered = tera.render("digest.html", &digest_context).unwrap();
 
-        let digest_page_path = output_dir.join("digest.html");
+        let digest_page_path = ctx.output_dir.join("digest.html");
         let mut file = fs::File::create(digest_page_path)?;
         file.write_all(rendered.as_bytes())?;
     }
@@ -513,7 +582,7 @@ async fn async_main() -> Result<()> {
 
             let rendered = tera.render("render.html", &render_context).unwrap();
 
-            let render_page_path = output_dir.join("render.html").canonicalize().unwrap();
+            let render_page_path = ctx.output_dir.join("render.html");
             let mut file = fs::File::create(&render_page_path)?;
             file.write_all(rendered.as_bytes())?;
 
@@ -547,18 +616,12 @@ async fn async_main() -> Result<()> {
 
             // create a new browser page and navigate to the url
             let render_page = render_page_path.to_str().unwrap();
-            // Garbage prefix on Windows: \\?\C:\...
-            let render_page_file = String::from("file://")
-                + || -> &str {
-                    if cfg!(windows) {
-                        return render_page.split_at(4).1;
-                    }
-                    render_page
-                }();
+            let render_page_file = String::from("file://") + render_page;
             println!("Opening page for rendering: {render_page_file}");
             let page = browser.new_page(render_page_file).await?;
 
-            sleep(Duration::from_secs(3)).await;
+            // Wait to load? How much time is enough? Can we know the exact moment and wait synchronously?
+            sleep(Duration::from_millis(100)).await;
 
             // find the search bar type into the search field and hit `Enter`,
             // this triggers a new navigation to the search result page
@@ -566,9 +629,7 @@ async fn async_main() -> Result<()> {
 
             // page.bring_to_front().await?;
             for (i, card) in cards.iter().enumerate() {
-                card.focus().await?.scroll_into_view().await?;
-                sleep(Duration::from_secs(1)).await;
-                let card_path = output_dir.join(format!("card_{:02}.png", i));
+                let card_path = ctx.output_dir.join(format!("card_{:02}.png", i));
                 let _ = card
                     .save_screenshot(CaptureScreenshotFormat::Png, &card_path)
                     .await?;
@@ -582,11 +643,6 @@ async fn async_main() -> Result<()> {
     }
 
     // End
-
-    if sign_out {
-        // TODO revisit examples and get rid of "handle references" (also, this panics)
-        drop(client_handle.sign_out_disconnect().await);
-    }
 
     Ok(())
 }

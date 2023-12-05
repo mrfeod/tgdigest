@@ -20,6 +20,7 @@ substring = "1.4.5"
 partial_sort = "0.2.0"
 chromiumoxide = { version = "0.5.4", features = ["tokio-runtime"], default-features = false }
 tera = "1.19.1"
+path-slash = "0.x"
 
 serde = "1.0.89"
 serde_json = "1.0.107"
