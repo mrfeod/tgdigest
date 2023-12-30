@@ -34,12 +34,17 @@ Options:
           Print version
 ```
 
+# Build
+```
+cargo build
+cargo build --release
+```
+
 # Typical usage
 The next commands do:
- - Generates `digest.html` for 2021 year with 5 posts for each category and editor choice from http://t.me/ithueti/5132
+ - Generates `digest.html` for dates range with 3 posts for each category and editor's choice from http://t.me/ithueti/5132
  - Renders `card_*.png` for first post in each category
- - Generate `digest.mp4` video from cards
 ```
-./tgdigest.exe ithueti --digest --top-count 5 --editor-choice-post-id 5132 --from-date '2021-01-01 00:00:01 UTC' --to-date '2021-12-31 23:59:59 UTC' cards 1 1 1 1
-./make_video.sh
+cd target/debug
+./tgdigest.exe ithueti --digest --input-dir="../../data" --top-count 3 --editor-choice-post-id 5132 --from-date '2023-07-14 00:00:00 UTC' --to-date '2023-10-02 00:00:00 UTC' cards 1 1 1 1
 ```
