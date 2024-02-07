@@ -1,27 +1,24 @@
+mod context;
+mod path_util;
+mod tg;
+mod util;
+
+use crate::util::*;
+
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chrono::{DateTime, Local, Utc};
 use clap::{Parser, Subcommand};
 use futures_util::stream::StreamExt;
-use grammers_client::{Client, Config, SignInError};
-use grammers_session::Session;
 use log;
 use partial_sort::PartialSort;
 use simple_logger::SimpleLogger;
 use std::fs;
-use std::io::{self, BufRead as _, Write as _};
-use std::path::PathBuf;
+use std::io::Write as _;
 use tera::Tera;
 use tokio::runtime;
 use tokio::time::sleep;
 use tokio::time::Duration;
-
-// Trait for extending std::path::PathBuf
-use path_slash::PathBufExt as _;
-
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-const SESSION_FILE: &str = "tgdigest.session";
 
 #[derive(Copy, Clone)]
 enum ActionType {
@@ -281,145 +278,6 @@ fn icon_url(icon: &str) -> String {
     )
 }
 
-fn prompt(message: &str) -> Result<String> {
-    let stdout = io::stdout();
-    let mut stdout = stdout.lock();
-    stdout.write_all(message.as_bytes())?;
-    stdout.flush()?;
-
-    let stdin = io::stdin();
-    let mut stdin = stdin.lock();
-
-    let mut line = String::new();
-    stdin.read_line(&mut line)?;
-    Ok(line)
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct AppContext {
-    input_dir: std::path::PathBuf,
-    output_dir: std::path::PathBuf,
-    session_file: std::path::PathBuf,
-}
-
-struct TelegramAPI {
-    client: grammers_client::client::Client,
-}
-
-impl TelegramAPI {
-    async fn create(ctx: &AppContext) -> Result<TelegramAPI> {
-        let api_id: i32 = std::env::var("TG_ID")
-            .expect(
-                "TG_ID env var is not set. Visit https://my.telegram.org/ if you don't have it.",
-            )
-            .parse()
-            .expect("TG_ID is not i32");
-        let api_hash = std::env::var("TG_HASH").expect(
-            "TG_HASH env var is not set. Visit https://my.telegram.org/ if you don't have it.",
-        );
-
-        println!("Connecting to Telegram...");
-        let session_file = ctx.input_dir.join(SESSION_FILE);
-        let session = match Session::load_file_or_create(&session_file) {
-            Ok(session) => session,
-            Err(why) => panic!(
-                "Can't load session file {}: {why}",
-                session_file.canonicalize().unwrap().to_str().unwrap()
-            ),
-        };
-        let client = Client::connect(Config {
-            session,
-            api_id,
-            api_hash,
-            params: Default::default(),
-        })
-        .await
-        .expect("Can't connect to Telegram");
-        println!("Connected!");
-
-        if !client.is_authorized().await.expect("Authorization error") {
-            println!("Signing in...");
-            let phone = prompt("Enter your phone number (international format): ")?;
-            let token = client.request_login_code(&phone).await?;
-            let code = prompt("Enter the code you received: ")?;
-            let signed_in = client.sign_in(&token, &code).await;
-            match signed_in {
-                Err(SignInError::PasswordRequired(password_token)) => {
-                    // Note: this `prompt` method will echo the password in the console.
-                    //       Real code might want to use a better way to handle this.
-                    let hint = password_token.hint().unwrap_or("None");
-                    let prompt_message = format!("Enter the password (hint {}): ", &hint);
-                    let password = prompt(prompt_message.as_str())?;
-
-                    client
-                        .check_password(password_token, password.trim())
-                        .await?;
-                }
-                Ok(_) => (),
-                Err(e) => panic!("{}", e),
-            };
-            println!("Signed in!");
-            match client
-                .session()
-                .save_to_file(ctx.input_dir.join(SESSION_FILE))
-            {
-                Ok(_) => {}
-                Err(e) => {
-                    println!("NOTE: failed to save the session {}", e);
-                }
-            }
-        }
-
-        Ok(TelegramAPI { client })
-    }
-
-    fn client(&self) -> grammers_client::client::Client {
-        // This handle can be `clone()`'d around and freely moved into other tasks, so you can invoke
-        // methods concurrently if you need to. While you do this, the single owned `client` is the
-        // one that communicates with the network.
-        self.client.clone()
-    }
-}
-
-fn fix_path_slash(path: &std::path::PathBuf) -> Result<std::path::PathBuf> {
-    match path.to_slash() {
-        Some(slashed) => Ok(std::path::PathBuf::from(slashed.to_string())),
-        _ => Err(format!(
-            "Can't handle the path '{}'",
-            path.to_str().unwrap_or("<not UTF-8 path>")
-        )
-        .into()),
-    }
-}
-
-fn handle_path(
-    input: Option<std::path::PathBuf>,
-    working_dir: &std::path::PathBuf,
-) -> Result<std::path::PathBuf> {
-    if working_dir.is_relative() {
-        return Err(format!(
-            "Working directory is not absolute: {}",
-            working_dir.to_str().unwrap_or("<not UTF-8 path>")
-        )
-        .into());
-    }
-
-    let path = match input {
-        Some(path) => working_dir.join(path),
-        _ => working_dir.clone(),
-    };
-
-    if !path.exists() {
-        return Err(format!(
-            "Path does not exist: {}",
-            path.to_str().unwrap_or("<not UTF-8 path>")
-        )
-        .into());
-    }
-
-    fix_path_slash(&path)
-}
-
 async fn async_main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -429,32 +287,14 @@ async fn async_main() -> Result<()> {
     let from_date = cli.from_date.unwrap_or(week_ago);
     let to_date = cli.to_date.unwrap_or(current_date);
 
-    let working_dir = std::env::current_dir()?;
-
-    let config_path = handle_path(
-        Some(cli.config.unwrap_or(PathBuf::from("./cfg.json"))),
-        &working_dir,
-    )?;
-    println!(
-        "Loading config: {}",
-        config_path.to_str().expect("Can't find config file")
-    );
-
-    let data = fs::read_to_string(config_path).expect("Unable to read file");
-    let ctx: AppContext = serde_json::from_str(data.as_str()).expect("Unable to parse cfg.json");
-    let ctx: AppContext = AppContext {
-        input_dir: handle_path(Some(ctx.input_dir), &working_dir)?,
-        output_dir: handle_path(Some(ctx.output_dir), &working_dir)?,
-        session_file: handle_path(Some(ctx.session_file), &working_dir)?,
-    };
-    println!("Loaded context {:#?}", ctx);
+    let ctx = context::AppContext::new(cli.config)?;
 
     SimpleLogger::new()
         .with_level(log::LevelFilter::Debug)
         .init()
         .unwrap();
 
-    let tg = TelegramAPI::create(&ctx).await?;
+    let tg = tg::TelegramAPI::create(&ctx).await?;
     let client = tg.client();
 
     // LOAD CHAT
