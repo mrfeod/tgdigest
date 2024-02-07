@@ -10,6 +10,7 @@ use partial_sort::PartialSort;
 use simple_logger::SimpleLogger;
 use std::fs;
 use std::io::{self, BufRead as _, Write as _};
+use std::path::PathBuf;
 use tera::Tera;
 use tokio::runtime;
 use tokio::time::sleep;
@@ -230,27 +231,23 @@ impl Block {
 #[command(version = "0.5")]
 #[command(about = "Create digest for your telegram channel", long_about = None)]
 struct Cli {
-    #[arg(short, long)]
-    /// Directory with tgdigest.session file and html templates, default is working directory
-    input_dir: Option<std::path::PathBuf>,
-
-    #[arg(short, long)]
-    /// Directory to write all the program artifacts, default is working directory
-    output_dir: Option<std::path::PathBuf>,
-
-    #[arg(short, long)]
-    /// Generate digest.html
-    digest: bool,
-
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// t.me/<CHANNEL_NAME>
+    channel_name: String,
+
+    /// Path to configuration file
+    #[arg(short, long)]
+    config: Option<std::path::PathBuf>,
 
     #[arg(long, default_value_t = 3)]
     /// Count of posts in digest
     top_count: usize,
 
-    /// t.me/<CHANNEL_NAME>
-    channel_name: String,
+    /// Template name from file-configured 'input_dir'
+    #[arg(short, long)]
+    mode: String,
 
     #[arg(short, long, default_value_t = -1)]
     /// The id of the post to place it in "Editor choice" block
@@ -272,6 +269,9 @@ enum Commands {
         forwards: usize,
         views: usize,
     },
+
+    /// Generate digest
+    Digest {},
 }
 
 fn icon_url(icon: &str) -> String {
@@ -295,9 +295,11 @@ fn prompt(message: &str) -> Result<String> {
     Ok(line)
 }
 
+#[derive(Debug, serde::Deserialize)]
 struct AppContext {
     input_dir: std::path::PathBuf,
     output_dir: std::path::PathBuf,
+    session_file: std::path::PathBuf,
 }
 
 struct TelegramAPI {
@@ -379,6 +381,17 @@ impl TelegramAPI {
     }
 }
 
+fn fix_path_slash(path: &std::path::PathBuf) -> Result<std::path::PathBuf> {
+    match path.to_slash() {
+        Some(slashed) => Ok(std::path::PathBuf::from(slashed.to_string())),
+        _ => Err(format!(
+            "Can't handle the path '{}'",
+            path.to_str().unwrap_or("<not UTF-8 path>")
+        )
+        .into()),
+    }
+}
+
 fn handle_path(
     input: Option<std::path::PathBuf>,
     working_dir: &std::path::PathBuf,
@@ -404,14 +417,7 @@ fn handle_path(
         .into());
     }
 
-    match path.to_slash() {
-        Some(slashed) => Ok(std::path::PathBuf::from(slashed.to_string())),
-        _ => Err(format!(
-            "Can't handle the path '{}'",
-            path.to_str().unwrap_or("<not UTF-8 path>")
-        )
-        .into()),
-    }
+    fix_path_slash(&path)
 }
 
 async fn async_main() -> Result<()> {
@@ -424,13 +430,24 @@ async fn async_main() -> Result<()> {
     let to_date = cli.to_date.unwrap_or(current_date);
 
     let working_dir = std::env::current_dir()?;
-    let input_dir = handle_path(cli.input_dir, &working_dir)?;
-    let output_dir = handle_path(cli.output_dir, &working_dir)?;
 
+    let config_path = handle_path(
+        Some(cli.config.unwrap_or(PathBuf::from("./cfg.json"))),
+        &working_dir,
+    )?;
+    println!(
+        "Loading config: {}",
+        config_path.to_str().expect("Can't find config file")
+    );
+
+    let data = fs::read_to_string(config_path).expect("Unable to read file");
+    let ctx: AppContext = serde_json::from_str(data.as_str()).expect("Unable to parse cfg.json");
     let ctx: AppContext = AppContext {
-        input_dir,
-        output_dir,
+        input_dir: handle_path(Some(ctx.input_dir), &working_dir)?,
+        output_dir: handle_path(Some(ctx.output_dir), &working_dir)?,
+        session_file: handle_path(Some(ctx.session_file), &working_dir)?,
     };
+    println!("Loaded context {:#?}", ctx);
 
     SimpleLogger::new()
         .with_level(log::LevelFilter::Debug)
@@ -459,7 +476,7 @@ async fn async_main() -> Result<()> {
     let mut messages = client
         .iter_messages(ithueti)
         .max_date(to_date.timestamp() as i32)
-        .limit(50000);
+        .limit(30000);
     let mut posts = Post::get_by_date(&mut messages, from_date, to_date).await?;
 
     let post_top = TopPost::get_top(cli.top_count, &mut posts);
@@ -474,67 +491,76 @@ async fn async_main() -> Result<()> {
 
     let mut tera = Tera::default();
 
-    let digest_template = ctx.input_dir.join("digest_template.html");
+    let digest_template = ctx
+        .input_dir
+        .join(format!("{}/digest_template.html", cli.mode));
     tera.add_template_file(digest_template, Some("digest.html"))
         .unwrap();
 
-    let render_template = ctx.input_dir.join("render_template.html");
+    let render_template = ctx
+        .input_dir
+        .join(format!("{}/render_template.html", cli.mode));
     tera.add_template_file(render_template, Some("render.html"))
         .unwrap();
 
-    // Digest part
-
-    if cli.digest {
-        println!("Creating digest.html");
-
-        let get_posts = |action: ActionType| post_top.index(action);
-        let blocks = vec![
-            Block {
-                header: String::from("По комментариям"),
-                icon: icon_url("💬"),
-                cards: Card::create_cards(get_posts(ActionType::Replies), ActionType::Replies),
-                ..Block::default()
-            },
-            Block {
-                header: String::from("По реакциям"),
-                icon: icon_url("👏"),
-                cards: Card::create_cards(get_posts(ActionType::Reactions), ActionType::Reactions),
-                ..Block::default()
-            },
-            Block {
-                header: String::from("По репостам"),
-                icon: icon_url("🔁"),
-                filter: String::from("filter-blue"),
-                cards: Card::create_cards(get_posts(ActionType::Forwards), ActionType::Forwards),
-            },
-            Block {
-                header: String::from("По просмотрам"),
-                icon: icon_url("👁️"),
-                filter: String::from("filter-blue"),
-                cards: Card::create_cards(get_posts(ActionType::Views), ActionType::Views),
-            },
-        ]
-        .into_iter()
-        .filter(|b| b.cards.is_some())
-        .collect::<Vec<Block>>();
-
-        // Digest rendering
-
-        let mut digest_context = tera::Context::new();
-        digest_context.insert("blocks", &blocks);
-        digest_context.insert("editor_choice_id", &cli.editor_choice_post_id);
-        digest_context.insert("channel_name", &cli.channel_name.as_str());
-
-        let rendered = tera.render("digest.html", &digest_context).unwrap();
-
-        let digest_page_path = ctx.output_dir.join("digest.html");
-        let mut file = fs::File::create(digest_page_path)?;
-        file.write_all(rendered.as_bytes())?;
+    println!("Loaded templates:");
+    for template in tera.get_template_names() {
+        println!("{template}");
     }
 
-    // Rendering part
-
     match &cli.command {
+        Some(Commands::Digest {}) => {
+            println!("Creating digest.html");
+            let get_posts = |action: ActionType| post_top.index(action);
+            let blocks = vec![
+                Block {
+                    header: String::from("По комментариям"),
+                    icon: icon_url("💬"),
+                    cards: Card::create_cards(get_posts(ActionType::Replies), ActionType::Replies),
+                    ..Block::default()
+                },
+                Block {
+                    header: String::from("По реакциям"),
+                    icon: icon_url("👏"),
+                    cards: Card::create_cards(
+                        get_posts(ActionType::Reactions),
+                        ActionType::Reactions,
+                    ),
+                    ..Block::default()
+                },
+                Block {
+                    header: String::from("По репостам"),
+                    icon: icon_url("🔁"),
+                    filter: String::from("filter-blue"),
+                    cards: Card::create_cards(
+                        get_posts(ActionType::Forwards),
+                        ActionType::Forwards,
+                    ),
+                },
+                Block {
+                    header: String::from("По просмотрам"),
+                    icon: icon_url("👁️"),
+                    filter: String::from("filter-blue"),
+                    cards: Card::create_cards(get_posts(ActionType::Views), ActionType::Views),
+                },
+            ]
+            .into_iter()
+            .filter(|b| b.cards.is_some())
+            .collect::<Vec<Block>>();
+
+            // Digest rendering
+
+            let mut digest_context = tera::Context::new();
+            digest_context.insert("blocks", &blocks);
+            digest_context.insert("editor_choice_id", &cli.editor_choice_post_id);
+            digest_context.insert("channel_name", &cli.channel_name.as_str());
+
+            let rendered = tera.render("digest.html", &digest_context).unwrap();
+
+            let digest_page_path = ctx.output_dir.join("digest.html");
+            let mut file = fs::File::create(digest_page_path)?;
+            file.write_all(rendered.as_bytes())?;
+        }
         Some(Commands::Cards {
             replies,
             reactions,
