@@ -1,20 +1,23 @@
+mod action;
 mod cli;
 mod context;
 mod path_util;
+mod post;
 mod task;
 mod tg;
 mod util;
+mod workers;
 
+use crate::action::*;
 use crate::cli::*;
+use crate::post::*;
 use crate::task::*;
 use crate::util::*;
 
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
-use chrono::{DateTime, Utc};
 use futures_util::stream::StreamExt;
 use log;
-use partial_sort::PartialSort;
 use simple_logger::SimpleLogger;
 use std::fs;
 use std::io::Write as _;
@@ -22,150 +25,6 @@ use tera::Tera;
 use tokio::runtime;
 use tokio::time::sleep;
 use tokio::time::Duration;
-
-#[derive(Copy, Clone)]
-enum ActionType {
-    Replies = 0,
-    Reactions,
-    Forwards,
-    Views,
-}
-
-impl ActionType {
-    fn from(value: usize) -> ActionType {
-        match value {
-            0 => ActionType::Replies,
-            1 => ActionType::Reactions,
-            2 => ActionType::Forwards,
-            3 => ActionType::Views,
-            _ => panic!("No ActionType for {value}"),
-        }
-    }
-}
-
-#[derive(Copy, Clone, serde::Serialize)]
-pub struct Post {
-    date: i64,
-    id: i32,
-    views: Option<i32>,
-    forwards: Option<i32>,
-    replies: Option<i32>,
-    reactions: Option<i32>,
-}
-
-impl Post {
-    async fn get_by_date(
-        messages: &mut grammers_client::client::messages::MessageIter,
-        from_date: i64,
-        to_date: i64,
-    ) -> Result<Vec<Post>> {
-        let mut posts: Vec<Post> = Vec::new();
-        while let Some(message) = messages.next().await? {
-            let message: grammers_client::types::Message = message;
-
-            let date = message.date().timestamp();
-            if date > to_date {
-                continue;
-            }
-            if date < from_date {
-                break;
-            }
-
-            // let text = message.text().substring(0, 21);
-            posts.push(Post {
-                date: date,
-                id: message.id(),
-                views: message.view_count(),
-                forwards: message.forward_count(),
-                replies: message.reply_count(),
-                reactions: message.reaction_count(),
-            });
-        }
-
-        Result::Ok(posts)
-    }
-
-    fn count(&self, index: ActionType) -> Option<i32> {
-        match index {
-            ActionType::Replies => self.replies,
-            ActionType::Reactions => self.reactions,
-            ActionType::Forwards => self.forwards,
-            ActionType::Views => self.views,
-        }
-    }
-}
-
-#[derive(serde::Serialize)]
-struct TopPost {
-    top_count: usize,
-    replies: Vec<Post>,
-    reactions: Vec<Post>,
-    forwards: Vec<Post>,
-    views: Vec<Post>,
-}
-
-impl TopPost {
-    fn get_top_by(top_count: usize, posts: &mut Vec<Post>, action: ActionType) -> Vec<Post> {
-        let mut top_count = top_count;
-        if posts.len() < top_count {
-            // panic!("Size of posts less than {}", top_count)
-            top_count = posts.len();
-        }
-
-        posts.partial_sort(top_count, |a, b| b.count(action).cmp(&a.count(action)));
-        posts[0..top_count].to_vec()
-    }
-
-    fn get_top(top_count: usize, posts: &mut Vec<Post>) -> TopPost {
-        TopPost {
-            top_count,
-            replies: Self::get_top_by(top_count, posts, ActionType::Replies),
-            reactions: Self::get_top_by(top_count, posts, ActionType::Reactions),
-            forwards: Self::get_top_by(top_count, posts, ActionType::Forwards),
-            views: Self::get_top_by(top_count, posts, ActionType::Views),
-        }
-    }
-
-    fn index(&self, index: ActionType) -> &Vec<Post> {
-        match index {
-            ActionType::Replies => &self.replies,
-            ActionType::Reactions => &self.reactions,
-            ActionType::Forwards => &self.forwards,
-            ActionType::Views => &self.views,
-        }
-    }
-
-    fn print(&self) {
-        let headers = [
-            format!("Top {} by comments:", self.top_count),
-            format!("Top {} by reactions:", self.top_count),
-            format!("Top {} by forwards:", self.top_count),
-            format!("Top {} by views:", self.top_count),
-        ];
-        for (index, header) in headers.iter().enumerate() {
-            println!("{header}");
-            let action = ActionType::from(index);
-            for (pos, post) in self.index(action).iter().enumerate() {
-                match post.count(action) {
-                    Some(count) => {
-                        println!(
-                            "\t{}. {}: {}\t({})",
-                            pos + 1,
-                            post.id,
-                            count,
-                            DateTime::<Utc>::from_timestamp(post.date, 0).unwrap()
-                        );
-                    }
-                    None => {
-                        println!("No data");
-                        break;
-                    }
-                }
-            }
-            println!("");
-        }
-    }
-}
 
 #[derive(Clone, serde::Serialize)]
 struct Card {
@@ -240,35 +99,19 @@ async fn async_main() -> Result<()> {
     let tg = tg::TelegramAPI::create(&ctx).await?;
     let client = tg.client();
 
-    // LOAD CHAT
-    let ithueti: grammers_client::types::chat::Chat = client
-        .resolve_username(task.channel_name.as_str())
-        .await?
-        .unwrap();
-    let photo = ithueti.photo_downloadable(true);
-    match photo {
-        Some(photo) => {
-            let photo_out = ctx.output_dir.join("pic.png");
-            println!("Pic {}", photo_out.to_str().unwrap());
-            client.download_media(&photo, photo_out).await?;
+    // LOAD PIC
+    let channel_pic = workers::download_pic(&client, task.clone(), &ctx).await;
+    match channel_pic {
+        Ok(pic) => {
+            println!("Downloaded pic: {}", pic.to_str().unwrap());
         }
-        _ => {}
+        Err(e) => {
+            println!("Error: {}", e);
+        }
     }
 
     // GET MESSAGES
-    let mut messages = client
-        .iter_messages(ithueti)
-        .max_date(task.to_date as i32)
-        .limit(30000);
-    let mut posts = Post::get_by_date(&mut messages, task.from_date, task.to_date).await?;
-
-    let post_top = TopPost::get_top(task.top_count, &mut posts);
-    println!(
-        "Fetched data for https://t.me/{} from {} to {}",
-        task.channel_name, task.from_date, task.to_date
-    );
-
-    post_top.print();
+    let post_top = workers::get_top_posts(&client, task.clone()).await?;
 
     // Template part
 
