@@ -1,14 +1,17 @@
+mod cli;
 mod context;
 mod path_util;
+mod task;
 mod tg;
 mod util;
 
+use crate::cli::*;
+use crate::task::*;
 use crate::util::*;
 
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
-use chrono::{DateTime, Local, Utc};
-use clap::{Parser, Subcommand};
+use chrono::{DateTime, Utc};
 use futures_util::stream::StreamExt;
 use log;
 use partial_sort::PartialSort;
@@ -53,14 +56,14 @@ pub struct Post {
 impl Post {
     async fn get_by_date(
         messages: &mut grammers_client::client::messages::MessageIter,
-        from_date: DateTime<Utc>,
-        to_date: DateTime<Utc>,
+        from_date: i64,
+        to_date: i64,
     ) -> Result<Vec<Post>> {
         let mut posts: Vec<Post> = Vec::new();
         while let Some(message) = messages.next().await? {
             let message: grammers_client::types::Message = message;
 
-            let date = DateTime::<Utc>::from_timestamp(message.date().timestamp(), 0).unwrap();
+            let date = message.date().timestamp();
             if date > to_date {
                 continue;
             }
@@ -70,7 +73,7 @@ impl Post {
 
             // let text = message.text().substring(0, 21);
             posts.push(Post {
-                date: date.timestamp(),
+                date: date,
                 id: message.id(),
                 views: message.view_count(),
                 forwards: message.forward_count(),
@@ -103,8 +106,10 @@ struct TopPost {
 
 impl TopPost {
     fn get_top_by(top_count: usize, posts: &mut Vec<Post>, action: ActionType) -> Vec<Post> {
+        let mut top_count = top_count;
         if posts.len() < top_count {
-            panic!("Size of posts less than {}", top_count)
+            // panic!("Size of posts less than {}", top_count)
+            top_count = posts.len();
         }
 
         posts.partial_sort(top_count, |a, b| b.count(action).cmp(&a.count(action)));
@@ -177,7 +182,7 @@ impl Card {
             id: -1,
             count: None,
             header: String::from("UNDEFINED"),
-            icon: icon_url("⚠️"),
+            icon: util::icon_url("⚠️"),
             filter: String::from(""),
         }
     }
@@ -215,79 +220,17 @@ impl Block {
     fn default() -> Self {
         Block {
             header: String::from("UNDEFINED"),
-            icon: icon_url("⚠️"),
+            icon: util::icon_url("⚠️"),
             filter: String::from(""),
             cards: None,
         }
     }
 }
 
-#[derive(Parser)]
-#[command(name = "tgdigest")]
-#[command(author = "Anton Sosnin <antsosnin@yandex.ru>")]
-#[command(version = "0.5")]
-#[command(about = "Create digest for your telegram channel", long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-
-    /// t.me/<CHANNEL_NAME>
-    channel_name: String,
-
-    /// Path to configuration file
-    #[arg(short, long)]
-    config: Option<std::path::PathBuf>,
-
-    #[arg(long, default_value_t = 3)]
-    /// Count of posts in digest
-    top_count: usize,
-
-    /// Template name from file-configured 'input_dir'
-    #[arg(short, long)]
-    mode: String,
-
-    #[arg(short, long, default_value_t = -1)]
-    /// The id of the post to place it in "Editor choice" block
-    editor_choice_post_id: i32,
-
-    #[arg(short, long)]
-    from_date: Option<DateTime<Utc>>,
-
-    #[arg(short, long)]
-    to_date: Option<DateTime<Utc>>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Generate cards from chosen digest posts from 1 to <TOP_COUNT>
-    Cards {
-        replies: usize,
-        reactions: usize,
-        forwards: usize,
-        views: usize,
-    },
-
-    /// Generate digest
-    Digest {},
-}
-
-fn icon_url(icon: &str) -> String {
-    format!(
-        "https://raw.githubusercontent.com/googlefonts/noto-emoji/main/svg/emoji_u{}.svg",
-        format!("{:04x}", icon.chars().nth(0).unwrap_or('❌') as u32)
-    )
-}
-
 async fn async_main() -> Result<()> {
-    let cli = Cli::parse();
-
-    let current_date = DateTime::<Utc>::from_timestamp(Local::now().timestamp(), 0).unwrap();
-    let week_ago = current_date - chrono::Duration::days(7);
-
-    let from_date = cli.from_date.unwrap_or(week_ago);
-    let to_date = cli.to_date.unwrap_or(current_date);
-
-    let ctx = context::AppContext::new(cli.config)?;
+    let cli = Args::parse_args();
+    let ctx = context::AppContext::new(cli.config.clone())?;
+    let task = Task::from_cli(cli);
 
     SimpleLogger::new()
         .with_level(log::LevelFilter::Debug)
@@ -299,7 +242,7 @@ async fn async_main() -> Result<()> {
 
     // LOAD CHAT
     let ithueti: grammers_client::types::chat::Chat = client
-        .resolve_username(cli.channel_name.as_str())
+        .resolve_username(task.channel_name.as_str())
         .await?
         .unwrap();
     let photo = ithueti.photo_downloadable(true);
@@ -315,14 +258,14 @@ async fn async_main() -> Result<()> {
     // GET MESSAGES
     let mut messages = client
         .iter_messages(ithueti)
-        .max_date(to_date.timestamp() as i32)
+        .max_date(task.to_date as i32)
         .limit(30000);
-    let mut posts = Post::get_by_date(&mut messages, from_date, to_date).await?;
+    let mut posts = Post::get_by_date(&mut messages, task.from_date, task.to_date).await?;
 
-    let post_top = TopPost::get_top(cli.top_count, &mut posts);
+    let post_top = TopPost::get_top(task.top_count, &mut posts);
     println!(
-        "Fetched data for https://t.me/{} from {from_date} to {to_date}",
-        cli.channel_name
+        "Fetched data for https://t.me/{} from {} to {}",
+        task.channel_name, task.from_date, task.to_date
     );
 
     post_top.print();
@@ -333,13 +276,13 @@ async fn async_main() -> Result<()> {
 
     let digest_template = ctx
         .input_dir
-        .join(format!("{}/digest_template.html", cli.mode));
+        .join(format!("{}/digest_template.html", task.mode));
     tera.add_template_file(digest_template, Some("digest.html"))
         .unwrap();
 
     let render_template = ctx
         .input_dir
-        .join(format!("{}/render_template.html", cli.mode));
+        .join(format!("{}/render_template.html", task.mode));
     tera.add_template_file(render_template, Some("render.html"))
         .unwrap();
 
@@ -348,20 +291,20 @@ async fn async_main() -> Result<()> {
         println!("{template}");
     }
 
-    match &cli.command {
-        Some(Commands::Digest {}) => {
+    match &task.command {
+        Commands::Digest {} => {
             println!("Creating digest.html");
             let get_posts = |action: ActionType| post_top.index(action);
             let blocks = vec![
                 Block {
                     header: String::from("По комментариям"),
-                    icon: icon_url("💬"),
+                    icon: util::icon_url("💬"),
                     cards: Card::create_cards(get_posts(ActionType::Replies), ActionType::Replies),
                     ..Block::default()
                 },
                 Block {
                     header: String::from("По реакциям"),
-                    icon: icon_url("👏"),
+                    icon: util::icon_url("👏"),
                     cards: Card::create_cards(
                         get_posts(ActionType::Reactions),
                         ActionType::Reactions,
@@ -370,7 +313,7 @@ async fn async_main() -> Result<()> {
                 },
                 Block {
                     header: String::from("По репостам"),
-                    icon: icon_url("🔁"),
+                    icon: util::icon_url("🔁"),
                     filter: String::from("filter-blue"),
                     cards: Card::create_cards(
                         get_posts(ActionType::Forwards),
@@ -379,7 +322,7 @@ async fn async_main() -> Result<()> {
                 },
                 Block {
                     header: String::from("По просмотрам"),
-                    icon: icon_url("👁️"),
+                    icon: util::icon_url("👁️"),
                     filter: String::from("filter-blue"),
                     cards: Card::create_cards(get_posts(ActionType::Views), ActionType::Views),
                 },
@@ -392,8 +335,8 @@ async fn async_main() -> Result<()> {
 
             let mut digest_context = tera::Context::new();
             digest_context.insert("blocks", &blocks);
-            digest_context.insert("editor_choice_id", &cli.editor_choice_post_id);
-            digest_context.insert("channel_name", &cli.channel_name.as_str());
+            digest_context.insert("editor_choice_id", &task.editor_choice_post_id);
+            digest_context.insert("channel_name", &task.channel_name.as_str());
 
             let rendered = tera.render("digest.html", &digest_context).unwrap();
 
@@ -401,14 +344,13 @@ async fn async_main() -> Result<()> {
             let mut file = fs::File::create(digest_page_path)?;
             file.write_all(rendered.as_bytes())?;
         }
-        Some(Commands::Cards {
+        Commands::Cards {
             replies,
             reactions,
             forwards,
             views,
-        }) => {
+        } => {
             println!("Creating render.html and *.png cards");
-
             let card_post_index = [*replies - 1, *reactions - 1, *forwards - 1, *views - 1];
 
             let get_post =
@@ -416,23 +358,23 @@ async fn async_main() -> Result<()> {
             let cards = vec![
                 Card {
                     header: String::from("Лучший по комментариям"),
-                    icon: icon_url("💬"),
+                    icon: util::icon_url("💬"),
                     ..Card::create_card(get_post(ActionType::Replies), ActionType::Replies)
                 },
                 Card {
                     header: String::from("Лучший по реакциям"),
-                    icon: icon_url("👏"),
+                    icon: util::icon_url("👏"),
                     ..Card::create_card(get_post(ActionType::Reactions), ActionType::Reactions)
                 },
                 Card {
                     header: String::from("Лучший по репостам"),
-                    icon: icon_url("🔁"),
+                    icon: util::icon_url("🔁"),
                     filter: String::from("filter-blue"),
                     ..Card::create_card(get_post(ActionType::Forwards), ActionType::Forwards)
                 },
                 Card {
                     header: String::from("Лучший по просмотрам"),
-                    icon: icon_url("👁️"),
+                    icon: util::icon_url("👁️"),
                     filter: String::from("filter-blue"),
                     ..Card::create_card(get_post(ActionType::Views), ActionType::Views)
                 },
@@ -443,8 +385,8 @@ async fn async_main() -> Result<()> {
 
             let mut render_context = tera::Context::new();
             render_context.insert("cards", &cards);
-            render_context.insert("editor_choice_id", &cli.editor_choice_post_id);
-            render_context.insert("channel_name", &cli.channel_name.as_str());
+            render_context.insert("editor_choice_id", &task.editor_choice_post_id);
+            render_context.insert("channel_name", &task.channel_name.as_str());
 
             let rendered = tera.render("render.html", &render_context).unwrap();
 
@@ -505,7 +447,6 @@ async fn async_main() -> Result<()> {
             browser.close().await?;
             let _ = handle.await;
         }
-        _ => {}
     }
 
     // End

@@ -16,10 +16,7 @@ impl AppContext {
     pub fn new(config: Option<std::path::PathBuf>) -> Result<AppContext> {
         let working_dir = std::env::current_dir()?;
 
-        let config = path_util::handle_path(
-            Some(config.unwrap_or(std::path::PathBuf::from("./cfg.json"))),
-            &working_dir,
-        )?;
+        let config = config.expect("No config file provided");
 
         let data = fs::read_to_string(config).expect("Unable to read file");
         let ctx: AppContext =
