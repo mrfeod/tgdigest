@@ -27,7 +27,7 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn from_cli(cli: Args) -> Self {
+    pub fn from_cli(cli: &Args) -> Self {
         let current_date = DateTime::<Utc>::from_timestamp(Local::now().timestamp(), 0).unwrap();
         let week_ago = current_date - chrono::Duration::days(7);
         Task {
@@ -41,12 +41,12 @@ impl Task {
         }
     }
 
-    fn from_string(s: &str) -> Result<Task> {
+    pub fn from_string(s: &str) -> Result<Task> {
         let task: Task = serde_json::from_str(s)?;
         Ok(task)
     }
 
-    fn to_string(&self) -> Result<String> {
+    pub fn to_string(&self) -> Result<String> {
         let task = serde_json::to_string(self)?;
         Ok(task)
     }
