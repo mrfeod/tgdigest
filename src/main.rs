@@ -69,7 +69,7 @@ lazy_static! {
 
 #[get("/")]
 async fn index() -> RawHtml<String> {
-    return digest("ithueti", "ithueti").await;
+    return digest("ithueti", "ithueti", None, None, None, None).await;
 }
 
 #[get("/pic/<channel>")]
@@ -104,14 +104,26 @@ async fn image(channel: &str) -> Option<NamedFile> {
     NamedFile::open(file).await.ok()
 }
 
-#[get("/digest/<mode>/<channel>")]
-async fn digest(mode: &str, channel: &str) -> RawHtml<String> {
+#[get("/digest/<mode>/<channel>?<top_count>&<editor_choice>&<from_date>&<to_date>")]
+async fn digest(
+    mode: &str,
+    channel: &str,
+    top_count: Option<usize>,
+    editor_choice: Option<i32>,
+    from_date: Option<i64>,
+    to_date: Option<i64>,
+) -> RawHtml<String> {
     let app = &APP;
+    let task = Task::from_cli(&app.args);
     let task = Task {
+        command: Commands::Digest {},
         mode: mode.to_string(),
         channel_name: channel.to_string(),
-        command: Commands::Digest {},
-        ..Task::from_cli(&app.args)
+        top_count: top_count.unwrap_or(task.top_count),
+        editor_choice_post_id: editor_choice.unwrap_or(task.editor_choice_post_id),
+        from_date: from_date.unwrap_or(task.from_date),
+        to_date: to_date.unwrap_or(task.to_date),
+        ..task
     };
     println!("Working on task: {}", task.to_string().unwrap());
 
