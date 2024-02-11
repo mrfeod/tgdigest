@@ -17,6 +17,7 @@ use crate::task::*;
 use crate::util::*;
 
 use log;
+use rocket::fs::NamedFile;
 use rocket::response::content;
 use rocket::response::content::RawHtml;
 use rocket::tokio::task::spawn_blocking;
@@ -67,8 +68,40 @@ lazy_static! {
 }
 
 #[get("/")]
-fn index() -> &'static str {
-    "Hello, world!"
+async fn index() -> RawHtml<String> {
+    return digest("ithueti", "ithueti").await;
+}
+
+#[get("/pic/<channel>")]
+async fn image(channel: &str) -> Option<NamedFile> {
+    let app = &APP;
+    let task = Task {
+        channel_name: channel.to_string(),
+        command: Commands::Digest {},
+        ..Task::from_cli(&app.args)
+    };
+    println!("Working on task: {}", task.to_string().unwrap());
+
+    let file = app
+        .ctx
+        .output_dir
+        .join(format!("{}.png", task.channel_name));
+    if file.exists() {
+        return NamedFile::open(file).await.ok();
+    }
+
+    let tg_task = task.clone();
+    let handle = spawn_blocking(|| async {
+        let tg = tg::TelegramAPI::create(&app.ctx).await.unwrap();
+        let client = tg.client();
+        workers::tg::download_pic(client, tg_task, &app.ctx).await
+    })
+    .await
+    .unwrap();
+
+    let file = handle.await.unwrap();
+
+    NamedFile::open(file).await.ok()
 }
 
 #[get("/digest/<mode>/<channel>")]
@@ -130,7 +163,7 @@ fn rocket() -> _ {
         );
     }
 
-    rocket::build().mount("/", routes![index, digest])
+    rocket::build().mount("/", routes![index, digest, image])
 }
 
 // async fn async_main() -> Result<()> {
