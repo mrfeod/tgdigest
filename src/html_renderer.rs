@@ -28,8 +28,14 @@ impl HtmlRenderer {
         })
     }
 
-    pub fn render(&self, template_name: &str, context: &tera::Context) -> Result<PathBuf> {
-        let rendered = self.engine.render(template_name, context)?;
+    pub fn render(&self, template_name: &str, context: &tera::Context) -> Result<String> {
+        match self.engine.render(template_name, context) {
+            Ok(rendered) => Ok(rendered),
+            Err(e) => Err(e.into()),
+        }
+    }
+    pub fn render_to_file(&self, template_name: &str, context: &tera::Context) -> Result<PathBuf> {
+        let rendered = self.render(template_name, context)?;
 
         let output_name = template_name
             .replace("_template", "")

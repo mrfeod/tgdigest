@@ -1,4 +1,5 @@
 mod action;
+mod card_renderer;
 mod cli;
 mod context;
 mod html_renderer;
@@ -10,20 +11,16 @@ mod util;
 mod workers;
 
 use crate::action::*;
+use crate::card_renderer::CardRenderer;
 use crate::cli::*;
 use crate::html_renderer::HtmlRenderer;
 use crate::post::*;
 use crate::task::*;
 use crate::util::*;
 
-use chromiumoxide::browser::{Browser, BrowserConfig};
-use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
-use futures_util::stream::StreamExt;
 use log;
 use simple_logger::SimpleLogger;
 use tokio::runtime;
-use tokio::time::sleep;
-use tokio::time::Duration;
 
 #[derive(Clone, serde::Serialize)]
 struct Card {
@@ -163,11 +160,11 @@ async fn async_main() -> Result<()> {
             digest_context.insert("editor_choice_id", &task.editor_choice_post_id);
             digest_context.insert("channel_name", &task.channel_name.as_str());
 
-            let digest_file = html_renderer.render(
+            let digest_file = html_renderer.render_to_file(
                 format!("{}/digest_template.html", task.mode).as_str(),
                 &digest_context,
             )?;
-            print!("Digest file rendered: {}", digest_file.to_str().unwrap());
+            println!("Digest file rendered: {}", digest_file.to_str().unwrap());
         }
         Commands::Cards {
             replies,
@@ -213,64 +210,21 @@ async fn async_main() -> Result<()> {
             render_context.insert("editor_choice_id", &task.editor_choice_post_id);
             render_context.insert("channel_name", &task.channel_name.as_str());
 
-            let render_file = html_renderer.render(
+            let rendered_html = html_renderer.render(
                 format!("{}/render_template.html", task.mode).as_str(),
                 &render_context,
             )?;
-            print!("Render file rendered: {}", render_file.to_str().unwrap());
+            println!(
+                "Render file rendered to html: lenght={}",
+                rendered_html.len()
+            );
 
             // Browser part
+            let card_renderer = CardRenderer::new().await?;
 
-            let viewport = chromiumoxide::handler::viewport::Viewport {
-                width: 2000,
-                height: 30000,
-                device_scale_factor: Some(1.0),
-                emulating_mobile: false,
-                is_landscape: false,
-                has_touch: false,
-            };
-
-            let (mut browser, mut handler) = Browser::launch(
-                BrowserConfig::builder()
-                    .window_size(2000, 30000)
-                    .viewport(viewport)
-                    .build()?,
-            )
-            .await?;
-
-            // spawn a new task that continuously polls the handler
-            let handle: tokio::task::JoinHandle<()> = tokio::task::spawn(async move {
-                while let Some(h) = handler.next().await {
-                    if h.is_err() {
-                        break;
-                    }
-                }
-            });
-
-            // create a new browser page and navigate to the url
-            let render_page = render_file.to_str().unwrap();
-            let render_page_file = String::from("file://") + render_page;
-            println!("Opening page for rendering: {render_page_file}");
-            let page = browser.new_page(render_page_file).await?;
-
-            // Wait to load? How much time is enough? Can we know the exact moment and wait synchronously?
-            sleep(Duration::from_millis(100)).await;
-
-            // find the search bar type into the search field and hit `Enter`,
-            // this triggers a new navigation to the search result page
-            let cards = page.find_elements("div").await?;
-
-            // page.bring_to_front().await?;
-            for (i, card) in cards.iter().enumerate() {
-                let card_path = ctx.output_dir.join(format!("card_{:02}.png", i));
-                let _ = card
-                    .save_screenshot(CaptureScreenshotFormat::Png, &card_path)
-                    .await?;
-                println!("Generated: {}", card_path.to_str().unwrap());
-            }
-
-            browser.close().await?;
-            let _ = handle.await;
+            card_renderer
+                .render_html(&ctx.output_dir, &rendered_html)
+                .await?;
         }
     }
 
