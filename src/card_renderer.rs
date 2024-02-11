@@ -51,7 +51,7 @@ impl CardRenderer {
             let _ = card
                 .save_screenshot(CaptureScreenshotFormat::Png, &card_path)
                 .await?;
-            println!("Generated: {}", card_path.to_str().unwrap());
+            println!("Card rendered: {}", card_path.to_str().unwrap());
         }
 
         Ok(())
