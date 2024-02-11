@@ -1,6 +1,7 @@
 mod action;
 mod cli;
 mod context;
+mod html_renderer;
 mod path_util;
 mod post;
 mod task;
@@ -10,6 +11,7 @@ mod workers;
 
 use crate::action::*;
 use crate::cli::*;
+use crate::html_renderer::HtmlRenderer;
 use crate::post::*;
 use crate::task::*;
 use crate::util::*;
@@ -19,9 +21,6 @@ use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use futures_util::stream::StreamExt;
 use log;
 use simple_logger::SimpleLogger;
-use std::fs;
-use std::io::Write as _;
-use tera::Tera;
 use tokio::runtime;
 use tokio::time::sleep;
 use tokio::time::Duration;
@@ -115,24 +114,7 @@ async fn async_main() -> Result<()> {
 
     // Template part
 
-    let mut tera = Tera::default();
-
-    let digest_template = ctx
-        .input_dir
-        .join(format!("{}/digest_template.html", task.mode));
-    tera.add_template_file(digest_template, Some("digest.html"))
-        .unwrap();
-
-    let render_template = ctx
-        .input_dir
-        .join(format!("{}/render_template.html", task.mode));
-    tera.add_template_file(render_template, Some("render.html"))
-        .unwrap();
-
-    println!("Loaded templates:");
-    for template in tera.get_template_names() {
-        println!("{template}");
-    }
+    let html_renderer = HtmlRenderer::new(&ctx)?;
 
     match &task.command {
         Commands::Digest {} => {
@@ -181,11 +163,11 @@ async fn async_main() -> Result<()> {
             digest_context.insert("editor_choice_id", &task.editor_choice_post_id);
             digest_context.insert("channel_name", &task.channel_name.as_str());
 
-            let rendered = tera.render("digest.html", &digest_context).unwrap();
-
-            let digest_page_path = ctx.output_dir.join("digest.html");
-            let mut file = fs::File::create(digest_page_path)?;
-            file.write_all(rendered.as_bytes())?;
+            let digest_file = html_renderer.render(
+                format!("{}/digest_template.html", task.mode).as_str(),
+                &digest_context,
+            )?;
+            print!("Digest file rendered: {}", digest_file.to_str().unwrap());
         }
         Commands::Cards {
             replies,
@@ -231,11 +213,11 @@ async fn async_main() -> Result<()> {
             render_context.insert("editor_choice_id", &task.editor_choice_post_id);
             render_context.insert("channel_name", &task.channel_name.as_str());
 
-            let rendered = tera.render("render.html", &render_context).unwrap();
-
-            let render_page_path = ctx.output_dir.join("render.html");
-            let mut file = fs::File::create(&render_page_path)?;
-            file.write_all(rendered.as_bytes())?;
+            let render_file = html_renderer.render(
+                format!("{}/render_template.html", task.mode).as_str(),
+                &render_context,
+            )?;
+            print!("Render file rendered: {}", render_file.to_str().unwrap());
 
             // Browser part
 
@@ -266,7 +248,7 @@ async fn async_main() -> Result<()> {
             });
 
             // create a new browser page and navigate to the url
-            let render_page = render_page_path.to_str().unwrap();
+            let render_page = render_file.to_str().unwrap();
             let render_page_file = String::from("file://") + render_page;
             println!("Opening page for rendering: {render_page_file}");
             let page = browser.new_page(render_page_file).await?;
