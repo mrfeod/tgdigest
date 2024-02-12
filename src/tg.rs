@@ -1,10 +1,14 @@
-use crate::context::*;
+use crate::context;
 use crate::path_util;
 use crate::util::*;
+use crate::Args;
 
 use grammers_client::{Client, Config, SignInError};
 use grammers_session::Session;
+use once_cell::sync::OnceCell;
 use std::io::{self, BufRead as _, Write as _};
+
+static TG: OnceCell<grammers_client::client::Client> = OnceCell::new();
 
 fn prompt(message: &str) -> Result<String> {
     let stdout = io::stdout();
@@ -25,8 +29,18 @@ pub struct TelegramAPI {
 }
 
 impl TelegramAPI {
-    pub async fn create(ctx: &AppContext) -> Result<TelegramAPI> {
+    async fn init_client() -> Result<grammers_client::client::Client> {
         println!("Connecting to Telegram...");
+
+        let args = Args::parse_args();
+
+        let ctx = match context::AppContext::new(args.config.clone()) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                panic!("Error: {}", e);
+            }
+        };
+
         let api_id = ctx.tg_id;
         let api_hash = ctx.tg_hash.clone();
         let tg_session = ctx.tg_session.clone();
@@ -77,7 +91,18 @@ impl TelegramAPI {
             }
         }
 
-        Ok(TelegramAPI { client })
+        Ok(client)
+    }
+
+    pub async fn create() -> Result<TelegramAPI> {
+        match TG.get().cloned() {
+            Some(client) => Ok(TelegramAPI { client }),
+            None => {
+                let client = Self::init_client().await?;
+                TG.set(client.clone()).unwrap();
+                Ok(TelegramAPI { client })
+            }
+        }
     }
 
     pub fn client(&self) -> grammers_client::client::Client {

@@ -32,7 +32,6 @@ extern crate lazy_static;
 struct App {
     args: Args,
     ctx: context::AppContext,
-    tg: tg::TelegramAPI,
     html_renderer: HtmlRenderer,
     card_renderer: CardRenderer,
 }
@@ -49,14 +48,12 @@ impl App {
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let tg = rt.block_on(tg::TelegramAPI::create(&ctx))?;
         let html_renderer: HtmlRenderer = HtmlRenderer::new(&ctx)?;
         let card_renderer: CardRenderer = rt.block_on(CardRenderer::new())?;
 
         Ok(App {
             args,
             ctx,
-            tg,
             html_renderer,
             card_renderer,
         })
@@ -92,7 +89,7 @@ async fn image(channel: &str) -> Option<NamedFile> {
 
     let tg_task = task.clone();
     let handle = spawn_blocking(|| async {
-        let tg = tg::TelegramAPI::create(&app.ctx).await.unwrap();
+        let tg = tg::TelegramAPI::create().await.unwrap();
         let client = tg.client();
         workers::tg::download_pic(client, tg_task, &app.ctx).await
     })
@@ -129,7 +126,7 @@ async fn digest(
 
     let tg_task = task.clone();
     let handle = spawn_blocking(|| async {
-        let tg = tg::TelegramAPI::create(&app.ctx).await.unwrap();
+        let tg = tg::TelegramAPI::create().await.unwrap();
         let client = tg.client();
         workers::tg::get_top_posts(client, tg_task).await
     })
