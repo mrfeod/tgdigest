@@ -18,6 +18,11 @@ use crate::html_renderer::HtmlRenderer;
 use crate::task::*;
 use crate::util::*;
 
+use chrono::DateTime;
+use chrono::Datelike;
+use chrono::Days;
+use chrono::Months;
+use chrono::Utc;
 use log;
 use rocket::fs::NamedFile;
 use rocket::response::content;
@@ -101,6 +106,123 @@ async fn image(channel: &str) -> Option<NamedFile> {
     let file = handle.await.unwrap();
 
     NamedFile::open(file).await.ok()
+}
+
+#[get("/digest/<mode>/<channel>/<year>/<month>/<week>?<top_count>&<editor_choice>")]
+async fn digest_by_week(
+    mode: &str,
+    channel: &str,
+    year: i32,
+    month: u32,
+    week: u32,
+    top_count: Option<usize>,
+    editor_choice: Option<i32>,
+) -> RawHtml<String> {
+    let from_date = DateTime::<Utc>::from_timestamp(0, 0)
+        .unwrap()
+        .with_year(year);
+    let from_date = match from_date {
+        Some(from_date) => from_date,
+        None => return content::RawHtml("Provided year is not allowed".to_string()),
+    };
+
+    let from_date = from_date.with_month(month);
+    let from_date = match from_date {
+        Some(from_date) => from_date,
+        None => return content::RawHtml("Provided month is not allowed".to_string()),
+    };
+
+    let base_day = 1 + from_date
+        .with_day(1)
+        .unwrap()
+        .weekday()
+        .number_from_monday();
+    let day = match week {
+        1..=5 => (week - 1) * 7 + base_day,
+        _ => 32, // Overflow day
+    };
+    let from_date = from_date.with_day(day);
+    let from_date = match from_date {
+        Some(from_date) => from_date,
+        None => return content::RawHtml("Provided week is not allowed".to_string()),
+    };
+
+    let to_date = from_date.checked_add_days(Days::new(7)).unwrap();
+
+    digest(
+        mode,
+        channel,
+        top_count,
+        editor_choice,
+        Some(from_date.timestamp()),
+        Some(to_date.timestamp()),
+    )
+    .await
+}
+
+#[get("/digest/<mode>/<channel>/<year>/<month>?<top_count>&<editor_choice>")]
+async fn digest_by_month(
+    mode: &str,
+    channel: &str,
+    year: i32,
+    month: u32,
+    top_count: Option<usize>,
+    editor_choice: Option<i32>,
+) -> RawHtml<String> {
+    let from_date = DateTime::<Utc>::from_timestamp(0, 0)
+        .unwrap()
+        .with_year(year);
+    let from_date = match from_date {
+        Some(from_date) => from_date,
+        None => return content::RawHtml("Provided year is not allowed".to_string()),
+    };
+
+    let from_date = from_date.with_month(month);
+    let from_date = match from_date {
+        Some(from_date) => from_date,
+        None => return content::RawHtml("Provided month is not allowed".to_string()),
+    };
+
+    let to_date = from_date.checked_add_months(Months::new(1)).unwrap();
+
+    digest(
+        mode,
+        channel,
+        top_count,
+        editor_choice,
+        Some(from_date.timestamp()),
+        Some(to_date.timestamp()),
+    )
+    .await
+}
+
+#[get("/digest/<mode>/<channel>/<year>?<top_count>&<editor_choice>")]
+async fn digest_by_year(
+    mode: &str,
+    channel: &str,
+    year: i32,
+    top_count: Option<usize>,
+    editor_choice: Option<i32>,
+) -> RawHtml<String> {
+    let from_date = DateTime::<Utc>::from_timestamp(0, 0)
+        .unwrap()
+        .with_year(year);
+    let from_date = match from_date {
+        Some(from_date) => from_date,
+        None => return content::RawHtml("Provided year is not allowed".to_string()),
+    };
+
+    let to_date = from_date.checked_add_months(Months::new(12)).unwrap();
+
+    digest(
+        mode,
+        channel,
+        top_count,
+        editor_choice,
+        Some(from_date.timestamp()),
+        Some(to_date.timestamp()),
+    )
+    .await
 }
 
 #[get("/digest/<mode>/<channel>?<top_count>&<editor_choice>&<from_date>&<to_date>")]
@@ -291,7 +413,18 @@ fn rocket() -> _ {
         );
     }
 
-    rocket::build().mount("/", routes![index, digest, image, video])
+    rocket::build().mount(
+        "/",
+        routes![
+            index,
+            digest,
+            digest_by_week,
+            digest_by_month,
+            digest_by_year,
+            image,
+            video
+        ],
+    )
 }
 
 // async fn async_main() -> Result<()> {
