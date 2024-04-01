@@ -26,8 +26,10 @@ use chrono::Utc;
 use log;
 use once_cell::sync::OnceCell;
 use rocket::fs::NamedFile;
+use rocket::http::Status;
 use rocket::response::content;
 use rocket::response::content::RawHtml;
+use rocket::response::status;
 use simple_logger::SimpleLogger;
 
 #[macro_use]
@@ -66,7 +68,7 @@ impl App {
 static APP: OnceCell<App> = OnceCell::new();
 
 #[get("/")]
-async fn index() -> RawHtml<String> {
+async fn index() -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     return digest("ithueti", "ithueti", None, None, None, None).await;
 }
 
@@ -110,19 +112,29 @@ async fn digest_by_week(
     week: u32,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
-) -> RawHtml<String> {
+) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let from_date = DateTime::<Utc>::from_timestamp(0, 0)
         .unwrap()
         .with_year(year);
     let from_date = match from_date {
         Some(from_date) => from_date,
-        None => return content::RawHtml("Provided year is not allowed".to_string()),
+        None => {
+            return Err(status::Custom(
+                Status::BadRequest,
+                "Provided year is not allowed".to_string(),
+            ))
+        }
     };
 
     let from_date = from_date.with_month(month);
     let from_date = match from_date {
         Some(from_date) => from_date,
-        None => return content::RawHtml("Provided month is not allowed".to_string()),
+        None => {
+            return Err(status::Custom(
+                Status::BadRequest,
+                "Provided month is not allowed".to_string(),
+            ))
+        }
     };
 
     let base_day = 1 + from_date
@@ -137,7 +149,12 @@ async fn digest_by_week(
     let from_date = from_date.with_day(day);
     let from_date = match from_date {
         Some(from_date) => from_date,
-        None => return content::RawHtml("Provided week is not allowed".to_string()),
+        None => {
+            return Err(status::Custom(
+                Status::BadRequest,
+                "Provided week is not allowed".to_string(),
+            ))
+        }
     };
 
     let to_date = from_date.checked_add_days(Days::new(7)).unwrap();
@@ -161,19 +178,29 @@ async fn digest_by_month(
     month: u32,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
-) -> RawHtml<String> {
+) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let from_date = DateTime::<Utc>::from_timestamp(0, 0)
         .unwrap()
         .with_year(year);
     let from_date = match from_date {
         Some(from_date) => from_date,
-        None => return content::RawHtml("Provided year is not allowed".to_string()),
+        None => {
+            return Err(status::Custom(
+                Status::BadRequest,
+                "Provided year is not allowed".to_string(),
+            ))
+        }
     };
 
     let from_date = from_date.with_month(month);
     let from_date = match from_date {
         Some(from_date) => from_date,
-        None => return content::RawHtml("Provided month is not allowed".to_string()),
+        None => {
+            return Err(status::Custom(
+                Status::BadRequest,
+                "Provided month is not allowed".to_string(),
+            ))
+        }
     };
 
     let to_date = from_date.checked_add_months(Months::new(1)).unwrap();
@@ -196,13 +223,18 @@ async fn digest_by_year(
     year: i32,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
-) -> RawHtml<String> {
+) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let from_date = DateTime::<Utc>::from_timestamp(0, 0)
         .unwrap()
         .with_year(year);
     let from_date = match from_date {
         Some(from_date) => from_date,
-        None => return content::RawHtml("Provided year is not allowed".to_string()),
+        None => {
+            return Err(status::Custom(
+                Status::BadRequest,
+                "Provided year is not allowed".to_string(),
+            ))
+        }
     };
 
     let to_date = from_date.checked_add_months(Months::new(12)).unwrap();
@@ -226,7 +258,7 @@ async fn digest(
     editor_choice: Option<i32>,
     from_date: Option<i64>,
     to_date: Option<i64>,
-) -> RawHtml<String> {
+) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let app = APP.get().unwrap();
     let task = Task::from_cli(&app.args);
     let task = Task {
@@ -246,13 +278,21 @@ async fn digest(
     let future = workers::tg::get_top_posts(client, tg_task);
     let post_top = match future.await {
         Ok(post_top) => post_top,
-        Err(e) => return content::RawHtml(e.to_string()),
+        Err(e) => {
+            return Err(status::Custom(
+                Status::InternalServerError,
+                format!("Error: {}", e),
+            ))
+        }
     };
 
     let digest_context = match workers::digest::create_context(post_top, task.clone()) {
         Ok(digest_context) => digest_context,
         Err(e) => {
-            return content::RawHtml(e.to_string());
+            return Err(status::Custom(
+                Status::InternalServerError,
+                format!("Error: {}", e),
+            ));
         }
     };
     let digest = match app.html_renderer.render(
@@ -261,11 +301,14 @@ async fn digest(
     ) {
         Ok(digest) => digest,
         Err(e) => {
-            return content::RawHtml(e.to_string());
+            return Err(status::Custom(
+                Status::InternalServerError,
+                format!("Error: {}", e),
+            ));
         }
     };
     println!("Digest html rendered: lenght={}", digest.len());
-    content::RawHtml(digest)
+    Ok(content::RawHtml(digest))
 }
 
 #[get("/render/<mode>/<channel>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>&<from_date>&<to_date>")]
@@ -280,7 +323,7 @@ async fn video(
     editor_choice: Option<i32>,
     from_date: Option<i64>,
     to_date: Option<i64>,
-) -> Option<NamedFile> {
+) -> std::result::Result<NamedFile, status::Custom<String>> {
     let app = APP.get().unwrap();
     let task = Task::from_cli(&app.args);
     let task = Task {
@@ -308,7 +351,10 @@ async fn video(
         Ok(post_top) => post_top,
         Err(e) => {
             println!("Error: {}", e);
-            return None;
+            return Err(status::Custom(
+                Status::InternalServerError,
+                format!("Error: {}", e),
+            ));
         }
     };
 
@@ -316,7 +362,10 @@ async fn video(
         Ok(render_context) => render_context,
         Err(e) => {
             println!("Error: {}", e);
-            return None;
+            return Err(status::Custom(
+                Status::InternalServerError,
+                format!("Error: {}", e),
+            ));
         }
     };
 
@@ -329,7 +378,10 @@ async fn video(
         Ok(rendered_html) => rendered_html,
         Err(e) => {
             println!("Error: {}", e);
-            return None;
+            return Err(status::Custom(
+                Status::InternalServerError,
+                format!("Error: {}", e),
+            ));
         }
     };
     println!(
@@ -340,7 +392,10 @@ async fn video(
     let output_dir = app.ctx.output_dir.join(&task.task_id);
     if let Err(e) = tokio::fs::create_dir_all(&output_dir).await {
         println!("Failed to create task directory: {}", e);
-        return None;
+        return Err(status::Custom(
+            Status::InternalServerError,
+            format!("Error: {}", e),
+        ));
     }
 
     let card_renderer = CardRenderer::new().await.unwrap();
@@ -348,7 +403,10 @@ async fn video(
         Ok(_) => (),
         Err(e) => {
             println!("Rendering error: {}", e);
-            return None;
+            return Err(status::Custom(
+                Status::InternalServerError,
+                format!("Error: {}", e),
+            ));
         }
     }
 
@@ -380,7 +438,10 @@ async fn video(
     println!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
 
     let file = output_dir.join("digest.mp4");
-    NamedFile::open(file).await.ok()
+    NamedFile::open(file).await.map_err(|e| {
+        println!("Error: {}", e);
+        status::Custom(Status::InternalServerError, format!("Error: {}", e))
+    })
 }
 
 #[tokio::main]
