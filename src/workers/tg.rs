@@ -4,7 +4,7 @@ use crate::task::Task;
 use crate::util::Result;
 
 async fn get_channel(
-    client: grammers_client::Client,
+    client: &grammers_client::Client,
     channel_name: &str,
 ) -> Result<grammers_client::types::chat::Chat> {
     match client.resolve_username(channel_name).await? {
@@ -18,7 +18,7 @@ pub async fn download_pic(
     task: Task,
     ctx: &AppContext,
 ) -> Result<std::path::PathBuf> {
-    let channel = get_channel(client.clone(), task.channel_name.as_str()).await?;
+    let channel = get_channel(&client, task.channel_name.as_str()).await?;
     let photo = channel.photo_downloadable(true);
     match photo {
         Some(photo) => {
@@ -40,7 +40,7 @@ pub async fn download_pic(
 }
 
 pub async fn get_top_posts(client: grammers_client::Client, task: Task) -> Result<TopPost> {
-    let channel = get_channel(client.clone(), task.channel_name.as_str()).await?;
+    let channel = get_channel(&client, task.channel_name.as_str()).await?;
     let mut messages = client
         .iter_messages(channel)
         .max_date(task.to_date as i32)
