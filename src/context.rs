@@ -22,9 +22,13 @@ impl AppContext {
         let ctx: AppContext =
             serde_json::from_str(data.as_str()).expect("Unable to parse cfg.json");
         let ctx: AppContext = AppContext {
-            input_dir: path_util::handle_path(Some(ctx.input_dir), &working_dir)?,
-            output_dir: path_util::handle_path(Some(ctx.output_dir), &working_dir)?,
-            tg_session: path_util::handle_path(Some(ctx.tg_session), &working_dir)?,
+            input_dir: path_util::handle_path(Some(ctx.input_dir), &working_dir, None)?,
+            output_dir: path_util::handle_path(Some(ctx.output_dir), &working_dir, None)?,
+            tg_session: path_util::handle_path(
+                Some(ctx.tg_session),
+                &working_dir,
+                Some(path_util::PathExists::DontCare),
+            )?,
             ..ctx
         };
         println!("Loaded context {:#?}", ctx);

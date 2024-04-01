@@ -4,6 +4,12 @@ use std::path::PathBuf;
 // Trait for extending std::path::PathBuf
 use path_slash::PathBufExt as _;
 
+pub enum PathExists {
+    MustExist,
+    MustNotExist,
+    DontCare,
+}
+
 pub fn to_slash(path: &PathBuf) -> Result<PathBuf> {
     match path.to_slash() {
         Some(slashed) => Ok(PathBuf::from(slashed.to_string())),
@@ -15,7 +21,11 @@ pub fn to_slash(path: &PathBuf) -> Result<PathBuf> {
     }
 }
 
-pub fn handle_path(input: Option<PathBuf>, working_dir: &PathBuf) -> Result<PathBuf> {
+pub fn handle_path(
+    input: Option<PathBuf>,
+    working_dir: &PathBuf,
+    force_exists: Option<PathExists>,
+) -> Result<PathBuf> {
     if working_dir.is_relative() {
         return Err(format!(
             "Working directory is not absolute: {}",
@@ -29,12 +39,26 @@ pub fn handle_path(input: Option<PathBuf>, working_dir: &PathBuf) -> Result<Path
         _ => working_dir.clone(),
     };
 
-    if !path.exists() {
-        return Err(format!(
-            "Path does not exist: {}",
-            path.to_str().unwrap_or("<not UTF-8 path>")
-        )
-        .into());
+    match force_exists.unwrap_or(PathExists::MustExist) {
+        PathExists::MustExist => {
+            if !path.exists() {
+                return Err(format!(
+                    "Path does not exist: {}",
+                    path.to_str().unwrap_or("<not UTF-8 path>")
+                )
+                .into());
+            }
+        }
+        PathExists::MustNotExist => {
+            if path.exists() {
+                return Err(format!(
+                    "Path already exists: {}",
+                    path.to_str().unwrap_or("<not UTF-8 path>")
+                )
+                .into());
+            }
+        }
+        _ => {}
     }
 
     to_slash(&path)

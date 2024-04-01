@@ -24,17 +24,14 @@ use chrono::Days;
 use chrono::Months;
 use chrono::Utc;
 use log;
+use once_cell::sync::OnceCell;
 use rocket::fs::NamedFile;
 use rocket::response::content;
 use rocket::response::content::RawHtml;
-use rocket::tokio::task::spawn_blocking;
 use simple_logger::SimpleLogger;
 
 #[macro_use]
 extern crate rocket;
-
-#[macro_use]
-extern crate lazy_static;
 
 struct App {
     args: Args,
@@ -44,7 +41,7 @@ struct App {
 }
 
 impl App {
-    fn new() -> Result<App> {
+    async fn new() -> Result<App> {
         let args = Args::parse_args();
 
         let ctx = match context::AppContext::new(args.config.clone()) {
@@ -54,9 +51,8 @@ impl App {
             }
         };
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
         let html_renderer: HtmlRenderer = HtmlRenderer::new(&ctx)?;
-        let card_renderer: CardRenderer = rt.block_on(CardRenderer::new())?;
+        let card_renderer: CardRenderer = CardRenderer::new().await?;
 
         Ok(App {
             args,
@@ -67,9 +63,7 @@ impl App {
     }
 }
 
-lazy_static! {
-    static ref APP: App = App::new().unwrap();
-}
+static APP: OnceCell<App> = OnceCell::new();
 
 #[get("/")]
 async fn index() -> RawHtml<String> {
@@ -78,7 +72,7 @@ async fn index() -> RawHtml<String> {
 
 #[get("/pic/<channel>")]
 async fn image(channel: &str) -> Option<NamedFile> {
-    let app = &APP;
+    let app = APP.get().unwrap();
     let task = Task {
         channel_name: channel.to_string(),
         command: Commands::Digest {},
@@ -95,15 +89,10 @@ async fn image(channel: &str) -> Option<NamedFile> {
     }
 
     let tg_task = task.clone();
-    let handle = spawn_blocking(|| async {
-        let tg = tg::TelegramAPI::create().await.unwrap();
-        let client = tg.client();
-        workers::tg::download_pic(client, tg_task, &app.ctx).await
-    })
-    .await
-    .unwrap();
-
-    let file = handle.await.unwrap();
+    let client = tg::TelegramAPI::client();
+    let file = workers::tg::download_pic(client, tg_task, &app.ctx)
+        .await
+        .unwrap();
 
     NamedFile::open(file).await.ok()
 }
@@ -234,7 +223,7 @@ async fn digest(
     from_date: Option<i64>,
     to_date: Option<i64>,
 ) -> RawHtml<String> {
-    let app = &APP;
+    let app = APP.get().unwrap();
     let task = Task::from_cli(&app.args);
     let task = Task {
         command: Commands::Digest {},
@@ -249,15 +238,9 @@ async fn digest(
     println!("Working on task: {}", task.to_string().unwrap());
 
     let tg_task = task.clone();
-    let handle = spawn_blocking(|| async {
-        let tg = tg::TelegramAPI::create().await.unwrap();
-        let client = tg.client();
-        workers::tg::get_top_posts(client, tg_task).await
-    })
-    .await
-    .unwrap();
-
-    let post_top = match handle.await {
+    let client = tg::TelegramAPI::client();
+    let future = workers::tg::get_top_posts(client, tg_task);
+    let post_top = match future.await {
         Ok(post_top) => post_top,
         Err(e) => return content::RawHtml(e.to_string()),
     };
@@ -294,7 +277,7 @@ async fn video(
     from_date: Option<i64>,
     to_date: Option<i64>,
 ) -> Option<NamedFile> {
-    let app = &APP;
+    let app = APP.get().unwrap();
     let task = Task::from_cli(&app.args);
     let task = Task {
         command: Commands::Cards {
@@ -314,15 +297,10 @@ async fn video(
     println!("Working on task: {}", task.to_string().unwrap());
 
     let tg_task = task.clone();
-    let handle = spawn_blocking(|| async {
-        let tg = tg::TelegramAPI::create().await.unwrap();
-        let client = tg.client();
-        workers::tg::get_top_posts(client, tg_task).await
-    })
-    .await
-    .unwrap();
+    let client = tg::TelegramAPI::client();
+    let future = workers::tg::get_top_posts(client, tg_task);
 
-    let post_top = match handle.await {
+    let post_top = match future.await {
         Ok(post_top) => post_top,
         Err(e) => {
             println!("Error: {}", e);
@@ -398,33 +376,59 @@ async fn video(
     NamedFile::open(file).await.ok()
 }
 
-#[launch]
-fn rocket() -> _ {
+#[tokio::main]
+async fn main() {
     SimpleLogger::new()
         .with_level(log::LevelFilter::Debug)
         .init()
         .unwrap();
 
     {
-        let app = &APP;
+        match tg::TelegramAPI::create().await {
+            Ok(tg) => {
+                println!("Connected to Telegram");
+                tg
+            }
+            Err(e) => panic!("Error: {}", e),
+        };
+        let app = match APP.get() {
+            Some(app) => app,
+            None => {
+                let app = match App::new().await {
+                    Ok(app) => app,
+                    Err(e) => panic!("Error: {}", e),
+                };
+                match APP.set(app) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        panic!("Error on creating App");
+                    }
+                }
+                APP.get().unwrap()
+            }
+        };
         println!(
             "Load app with config from {}",
             app.args.config.as_ref().unwrap().to_str().unwrap()
         );
     }
 
-    rocket::build().mount(
-        "/",
-        routes![
-            index,
-            digest,
-            digest_by_week,
-            digest_by_month,
-            digest_by_year,
-            image,
-            video
-        ],
-    )
+    rocket::build()
+        .mount(
+            "/",
+            routes![
+                index,
+                digest,
+                digest_by_week,
+                digest_by_month,
+                digest_by_year,
+                image,
+                video
+            ],
+        )
+        .launch()
+        .await
+        .unwrap();
 }
 
 // async fn async_main() -> Result<()> {

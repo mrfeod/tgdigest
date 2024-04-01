@@ -95,20 +95,26 @@ impl TelegramAPI {
     }
 
     pub async fn create() -> Result<TelegramAPI> {
-        match TG.get().cloned() {
-            Some(client) => Ok(TelegramAPI { client }),
+        match TG.get() {
+            Some(_) => Ok(TelegramAPI {
+                client: TelegramAPI::client(),
+            }),
             None => {
                 let client = Self::init_client().await?;
-                TG.set(client.clone()).unwrap();
-                Ok(TelegramAPI { client })
+                TG.set(client).unwrap();
+                Ok(TelegramAPI {
+                    client: TelegramAPI::client(),
+                })
             }
         }
     }
 
-    pub fn client(&self) -> grammers_client::client::Client {
+    pub fn client() -> grammers_client::client::Client {
         // This handle can be `clone()`'d around and freely moved into other tasks, so you can invoke
         // methods concurrently if you need to. While you do this, the single owned `client` is the
         // one that communicates with the network.
-        self.client.clone()
+        let client = TG.get();
+        assert!(client.is_some());
+        client.unwrap().clone()
     }
 }
