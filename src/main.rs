@@ -67,13 +67,17 @@ impl App {
 
 static APP: OnceCell<App> = OnceCell::new();
 
+fn http_status<T>(status: Status, msg: &str) -> std::result::Result<T, status::Custom<String>> {
+    Err(status::Custom(status, format!("{}: {}", status, msg)))
+}
+
 #[get("/")]
 async fn index() -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     return digest("ithueti", "ithueti", None, None, None, None).await;
 }
 
 #[get("/pic/<channel>")]
-async fn image(channel: &str) -> Option<NamedFile> {
+async fn image(channel: &str) -> std::result::Result<NamedFile, Status> {
     let app = APP.get().unwrap();
     let task = Task {
         channel_name: channel.to_string(),
@@ -87,16 +91,27 @@ async fn image(channel: &str) -> Option<NamedFile> {
         .output_dir
         .join(format!("{}.png", task.channel_name));
     if file.exists() {
-        return NamedFile::open(file).await.ok();
+        return NamedFile::open(file).await.map_err(|e| {
+            println!("Error: {}", e);
+            Status::InternalServerError
+        });
     }
 
     let tg_task = task.clone();
     let client = tg::TelegramAPI::client();
-    let file = workers::tg::download_pic(client, tg_task, &app.ctx)
-        .await
-        .unwrap();
+    let future = workers::tg::download_pic(client, tg_task, &app.ctx);
+    let file = match future.await {
+        Ok(file) => file,
+        Err(e) => {
+            println!("Error: {}", e);
+            return Err(Status::InternalServerError);
+        }
+    };
 
-    NamedFile::open(file).await.ok()
+    NamedFile::open(file).await.map_err(|e| {
+        println!("Error: {}", e);
+        Status::InternalServerError
+    })
 }
 
 /// Weeks start on a Monday. A week refers to the month in which the week
@@ -118,23 +133,13 @@ async fn digest_by_week(
         .with_year(year);
     let from_date = match from_date {
         Some(from_date) => from_date,
-        None => {
-            return Err(status::Custom(
-                Status::BadRequest,
-                "Provided year is not allowed".to_string(),
-            ))
-        }
+        None => return http_status(Status::BadRequest, "Provided year is not allowed"),
     };
 
     let from_date = from_date.with_month(month);
     let from_date = match from_date {
         Some(from_date) => from_date,
-        None => {
-            return Err(status::Custom(
-                Status::BadRequest,
-                "Provided month is not allowed".to_string(),
-            ))
-        }
+        None => return http_status(Status::BadRequest, "Provided month is not allowed"),
     };
 
     let base_day = 1 + from_date
@@ -149,12 +154,7 @@ async fn digest_by_week(
     let from_date = from_date.with_day(day);
     let from_date = match from_date {
         Some(from_date) => from_date,
-        None => {
-            return Err(status::Custom(
-                Status::BadRequest,
-                "Provided week is not allowed".to_string(),
-            ))
-        }
+        None => return http_status(Status::BadRequest, "Provided week is not allowed"),
     };
 
     let to_date = from_date.checked_add_days(Days::new(7)).unwrap();
@@ -184,23 +184,13 @@ async fn digest_by_month(
         .with_year(year);
     let from_date = match from_date {
         Some(from_date) => from_date,
-        None => {
-            return Err(status::Custom(
-                Status::BadRequest,
-                "Provided year is not allowed".to_string(),
-            ))
-        }
+        None => return http_status(Status::BadRequest, "Provided year is not allowed"),
     };
 
     let from_date = from_date.with_month(month);
     let from_date = match from_date {
         Some(from_date) => from_date,
-        None => {
-            return Err(status::Custom(
-                Status::BadRequest,
-                "Provided month is not allowed".to_string(),
-            ))
-        }
+        None => return http_status(Status::BadRequest, "Provided month is not allowed"),
     };
 
     let to_date = from_date.checked_add_months(Months::new(1)).unwrap();
@@ -229,12 +219,7 @@ async fn digest_by_year(
         .with_year(year);
     let from_date = match from_date {
         Some(from_date) => from_date,
-        None => {
-            return Err(status::Custom(
-                Status::BadRequest,
-                "Provided year is not allowed".to_string(),
-            ))
-        }
+        None => return http_status(Status::BadRequest, "Provided year is not allowed"),
     };
 
     let to_date = from_date.checked_add_months(Months::new(12)).unwrap();
@@ -278,21 +263,13 @@ async fn digest(
     let future = workers::tg::get_top_posts(client, tg_task);
     let post_top = match future.await {
         Ok(post_top) => post_top,
-        Err(e) => {
-            return Err(status::Custom(
-                Status::InternalServerError,
-                format!("Error: {}", e),
-            ))
-        }
+        Err(e) => return http_status(Status::InternalServerError, e.to_string().as_ref()),
     };
 
     let digest_context = match workers::digest::create_context(post_top, task.clone()) {
         Ok(digest_context) => digest_context,
         Err(e) => {
-            return Err(status::Custom(
-                Status::InternalServerError,
-                format!("Error: {}", e),
-            ));
+            return http_status(Status::InternalServerError, e.to_string().as_ref());
         }
     };
     let digest = match app.html_renderer.render(
@@ -301,10 +278,7 @@ async fn digest(
     ) {
         Ok(digest) => digest,
         Err(e) => {
-            return Err(status::Custom(
-                Status::InternalServerError,
-                format!("Error: {}", e),
-            ));
+            return http_status(Status::InternalServerError, e.to_string().as_ref());
         }
     };
     println!("Digest html rendered: lenght={}", digest.len());
@@ -323,7 +297,7 @@ async fn video(
     editor_choice: Option<i32>,
     from_date: Option<i64>,
     to_date: Option<i64>,
-) -> std::result::Result<NamedFile, status::Custom<String>> {
+) -> std::result::Result<NamedFile, Status> {
     let app = APP.get().unwrap();
     let task = Task::from_cli(&app.args);
     let task = Task {
@@ -347,68 +321,47 @@ async fn video(
     let client = tg::TelegramAPI::client();
     let future = workers::tg::get_top_posts(client, tg_task);
 
-    let post_top = match future.await {
-        Ok(post_top) => post_top,
-        Err(e) => {
-            println!("Error: {}", e);
-            return Err(status::Custom(
-                Status::InternalServerError,
-                format!("Error: {}", e),
-            ));
-        }
-    };
+    let post_top = future.await.map_err(|e| {
+        println!("Error: {}", e);
+        Status::InternalServerError
+    })?;
 
-    let render_context = match workers::cards::create_context(post_top, task.clone()) {
-        Ok(render_context) => render_context,
-        Err(e) => {
-            println!("Error: {}", e);
-            return Err(status::Custom(
-                Status::InternalServerError,
-                format!("Error: {}", e),
-            ));
-        }
-    };
+    let render_context = workers::cards::create_context(post_top, task.clone()).map_err(|e| {
+        println!("Error: {}", e);
+        Status::InternalServerError
+    })?;
 
-    image(channel).await;
+    image(channel).await?;
 
-    let rendered_html = match app.html_renderer.render(
-        format!("{}/render_template.html", task.mode).as_str(),
-        &render_context,
-    ) {
-        Ok(rendered_html) => rendered_html,
-        Err(e) => {
+    let rendered_html = app
+        .html_renderer
+        .render(
+            format!("{}/render_template.html", task.mode).as_str(),
+            &render_context,
+        )
+        .map_err(|e| {
             println!("Error: {}", e);
-            return Err(status::Custom(
-                Status::InternalServerError,
-                format!("Error: {}", e),
-            ));
-        }
-    };
+            Status::InternalServerError
+        })?;
+
     println!(
         "Render file rendered to html: lenght={}",
         rendered_html.len()
     );
 
     let output_dir = app.ctx.output_dir.join(&task.task_id);
-    if let Err(e) = tokio::fs::create_dir_all(&output_dir).await {
-        println!("Failed to create task directory: {}", e);
-        return Err(status::Custom(
-            Status::InternalServerError,
-            format!("Error: {}", e),
-        ));
-    }
+    tokio::fs::create_dir_all(&output_dir).await.map_err(|e| {
+        println!("Error: {}", e);
+        Status::InternalServerError
+    })?;
 
-    let card_renderer = CardRenderer::new().await.unwrap();
-    match card_renderer.render_html(&output_dir, &rendered_html).await {
-        Ok(_) => (),
-        Err(e) => {
-            println!("Rendering error: {}", e);
-            return Err(status::Custom(
-                Status::InternalServerError,
-                format!("Error: {}", e),
-            ));
-        }
-    }
+    app.card_renderer
+        .render_html(&output_dir, &rendered_html)
+        .await
+        .map_err(|e| {
+            println!("Error: {}", e);
+            Status::InternalServerError
+        })?;
 
     let video_maker = app
         .ctx
@@ -440,7 +393,7 @@ async fn video(
     let file = output_dir.join("digest.mp4");
     NamedFile::open(file).await.map_err(|e| {
         println!("Error: {}", e);
-        status::Custom(Status::InternalServerError, format!("Error: {}", e))
+        Status::InternalServerError
     })
 }
 
