@@ -97,6 +97,10 @@ async fn image(channel: &str) -> Option<NamedFile> {
     NamedFile::open(file).await.ok()
 }
 
+/// Weeks start on a Monday. A week refers to the month in which the week
+/// starts, so there are 4 months with 5 weeks and 8 with 4 weeks in a year.
+/// In 2024, for example, the months with 5 weeks are January, April, July and
+/// December.
 #[get("/digest/<mode>/<channel>/<year>/<month>/<week>?<top_count>&<editor_choice>")]
 async fn digest_by_week(
     mode: &str,
