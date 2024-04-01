@@ -24,9 +24,7 @@ fn prompt(message: &str) -> Result<String> {
     Ok(line)
 }
 
-pub struct TelegramAPI {
-    client: grammers_client::client::Client,
-}
+pub struct TelegramAPI {}
 
 impl TelegramAPI {
     async fn init_client() -> Result<grammers_client::client::Client> {
@@ -96,15 +94,11 @@ impl TelegramAPI {
 
     pub async fn create() -> Result<TelegramAPI> {
         match TG.get() {
-            Some(_) => Ok(TelegramAPI {
-                client: TelegramAPI::client(),
-            }),
+            Some(_) => Ok(TelegramAPI {}),
             None => {
                 let client = Self::init_client().await?;
                 TG.set(client).unwrap();
-                Ok(TelegramAPI {
-                    client: TelegramAPI::client(),
-                })
+                Ok(TelegramAPI {})
             }
         }
     }

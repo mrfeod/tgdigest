@@ -63,6 +63,21 @@ impl App {
             card_renderer,
         })
     }
+
+    async fn create() -> Result<&'static App> {
+        match APP.get() {
+            Some(app) => Ok(app),
+            None => {
+                let app = Self::new().await?;
+                APP.set(app).map_err(|_| "Can't set app")?;
+                Ok(APP.get().unwrap())
+            }
+        }
+    }
+
+    fn get() -> &'static App {
+        APP.get().unwrap()
+    }
 }
 
 static APP: OnceCell<App> = OnceCell::new();
@@ -78,7 +93,7 @@ async fn index() -> std::result::Result<RawHtml<String>, status::Custom<String>>
 
 #[get("/pic/<channel>")]
 async fn image(channel: &str) -> std::result::Result<NamedFile, Status> {
-    let app = APP.get().unwrap();
+    let app = App::get();
     let task = Task {
         channel_name: channel.to_string(),
         command: Commands::Digest {},
@@ -244,7 +259,7 @@ async fn digest(
     from_date: Option<i64>,
     to_date: Option<i64>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
-    let app = APP.get().unwrap();
+    let app = App::get();
     let task = Task::from_cli(&app.args);
     let task = Task {
         command: Commands::Digest {},
@@ -298,7 +313,7 @@ async fn video(
     from_date: Option<i64>,
     to_date: Option<i64>,
 ) -> std::result::Result<NamedFile, Status> {
-    let app = APP.get().unwrap();
+    let app = App::get();
     let task = Task::from_cli(&app.args);
     let task = Task {
         command: Commands::Cards {
@@ -406,32 +421,20 @@ async fn main() {
 
     {
         match tg::TelegramAPI::create().await {
-            Ok(tg) => {
+            Ok(_) => {
                 println!("Connected to Telegram");
-                tg
             }
             Err(e) => panic!("Error: {}", e),
         };
-        let app = match APP.get() {
-            Some(app) => app,
-            None => {
-                let app = match App::new().await {
-                    Ok(app) => app,
-                    Err(e) => panic!("Error: {}", e),
-                };
-                match APP.set(app) {
-                    Ok(_) => {}
-                    Err(_) => {
-                        panic!("Error on creating App");
-                    }
-                }
-                APP.get().unwrap()
+        match App::create().await {
+            Ok(_) => {
+                println!(
+                    "Loaded app with config from {}",
+                    App::get().args.config.as_ref().unwrap().to_str().unwrap()
+                )
             }
+            Err(e) => panic!("Error: {}", e),
         };
-        println!(
-            "Load app with config from {}",
-            app.args.config.as_ref().unwrap().to_str().unwrap()
-        );
     }
 
     rocket::build()
