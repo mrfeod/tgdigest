@@ -24,6 +24,9 @@ pub struct Task {
 
     // UTC timestamp
     pub to_date: i64,
+
+    // Unique task id
+    pub task_id: String,
 }
 
 impl Task {
@@ -38,6 +41,7 @@ impl Task {
             editor_choice_post_id: cli.editor_choice_post_id,
             from_date: cli.from_date.unwrap_or(week_ago).timestamp(),
             to_date: cli.to_date.unwrap_or(current_date).timestamp(),
+            task_id: uuid::Uuid::new_v4().as_simple().to_string(),
         }
     }
 

@@ -333,11 +333,14 @@ async fn video(
         rendered_html.len()
     );
 
+    let output_dir = app.ctx.output_dir.join(&task.task_id);
+    if let Err(e) = tokio::fs::create_dir_all(&output_dir).await {
+        println!("Failed to create task directory: {}", e);
+        return None;
+    }
+
     let card_renderer = CardRenderer::new().await.unwrap();
-    match card_renderer
-        .render_html(&app.ctx.output_dir, &rendered_html)
-        .await
-    {
+    match card_renderer.render_html(&output_dir, &rendered_html).await {
         Ok(_) => (),
         Err(e) => {
             println!("Rendering error: {}", e);
@@ -353,7 +356,7 @@ async fn video(
     println!(
         "Running bash: {} at {}",
         video_maker.to_str().unwrap_or("unknown"),
-        app.ctx.output_dir.to_str().unwrap_or("unknown")
+        output_dir.to_str().unwrap_or("unknown")
     );
     let mut command = if cfg!(windows) {
         Command::new("C:/Program Files/Git/usr/bin/bash.exe")
@@ -361,7 +364,7 @@ async fn video(
         Command::new("/bin/bash")
     };
     let output = command
-        .current_dir(app.ctx.output_dir.to_str().unwrap())
+        .current_dir(output_dir.to_str().unwrap())
         .arg("-c")
         .arg(video_maker)
         .output()
@@ -372,7 +375,7 @@ async fn video(
     println!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
     println!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
 
-    let file = app.ctx.output_dir.join("digest.mp4");
+    let file = output_dir.join("digest.mp4");
     NamedFile::open(file).await.ok()
 }
 
