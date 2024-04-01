@@ -86,6 +86,32 @@ fn http_status<T>(status: Status, msg: &str) -> std::result::Result<T, status::C
     Err(status::Custom(status, format!("{}: {}", status, msg)))
 }
 
+fn get_date_from_year(year: i32) -> std::result::Result<DateTime<Utc>, status::Custom<String>> {
+    if year < 2014 {
+        return http_status(Status::BadRequest, "Telegram did not exist");
+    };
+    match DateTime::<Utc>::from_timestamp(0, 0)
+        .unwrap()
+        .with_year(year)
+    {
+        Some(from_date) => Ok(from_date),
+        None => http_status(Status::BadRequest, "Provided year is not allowed"),
+    }
+}
+
+fn get_date_from_month(
+    year: i32,
+    month: u32,
+) -> std::result::Result<DateTime<Utc>, status::Custom<String>> {
+    let from_date = get_date_from_year(year)?;
+
+    let from_date = from_date.with_month(month);
+    match from_date {
+        Some(from_date) => Ok(from_date),
+        None => http_status(Status::BadRequest, "Provided month is not allowed"),
+    }
+}
+
 #[get("/")]
 async fn index() -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     return digest("ithueti", "ithueti", None, None, None, None).await;
@@ -143,19 +169,7 @@ async fn digest_by_week(
     top_count: Option<usize>,
     editor_choice: Option<i32>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
-    let from_date = DateTime::<Utc>::from_timestamp(0, 0)
-        .unwrap()
-        .with_year(year);
-    let from_date = match from_date {
-        Some(from_date) => from_date,
-        None => return http_status(Status::BadRequest, "Provided year is not allowed"),
-    };
-
-    let from_date = from_date.with_month(month);
-    let from_date = match from_date {
-        Some(from_date) => from_date,
-        None => return http_status(Status::BadRequest, "Provided month is not allowed"),
-    };
+    let from_date = get_date_from_month(year, month)?;
 
     let base_day = 1 + from_date
         .with_day(1)
@@ -194,19 +208,7 @@ async fn digest_by_month(
     top_count: Option<usize>,
     editor_choice: Option<i32>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
-    let from_date = DateTime::<Utc>::from_timestamp(0, 0)
-        .unwrap()
-        .with_year(year);
-    let from_date = match from_date {
-        Some(from_date) => from_date,
-        None => return http_status(Status::BadRequest, "Provided year is not allowed"),
-    };
-
-    let from_date = from_date.with_month(month);
-    let from_date = match from_date {
-        Some(from_date) => from_date,
-        None => return http_status(Status::BadRequest, "Provided month is not allowed"),
-    };
+    let from_date = get_date_from_month(year, month)?;
 
     let to_date = from_date.checked_add_months(Months::new(1)).unwrap();
 
@@ -229,14 +231,7 @@ async fn digest_by_year(
     top_count: Option<usize>,
     editor_choice: Option<i32>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
-    let from_date = DateTime::<Utc>::from_timestamp(0, 0)
-        .unwrap()
-        .with_year(year);
-    let from_date = match from_date {
-        Some(from_date) => from_date,
-        None => return http_status(Status::BadRequest, "Provided year is not allowed"),
-    };
-
+    let from_date = get_date_from_year(year)?;
     let to_date = from_date.checked_add_months(Months::new(12)).unwrap();
 
     digest(
@@ -272,6 +267,10 @@ async fn digest(
         ..task
     };
     println!("Working on task: {}", task.to_string().unwrap());
+
+    if task.from_date < 0 || task.to_date < 0 {
+        return http_status(Status::BadRequest, "Provided date is not allowed");
+    }
 
     let tg_task = task.clone();
     let client = tg::TelegramAPI::client();
