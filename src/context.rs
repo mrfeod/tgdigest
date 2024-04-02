@@ -31,7 +31,7 @@ impl AppContext {
             )?,
             ..ctx
         };
-        println!("Loaded context {:#?}", ctx);
+        log::info!("Loaded context {:#?}", ctx);
         Ok(ctx)
     }
 }

@@ -17,9 +17,9 @@ impl HtmlRenderer {
             Tera::new(format!("{}/**/*_template.html", ctx.input_dir.to_str().unwrap()).as_str())?;
         engine.autoescape_on(vec!["html"]);
 
-        println!("Loaded templates:");
+        log::info!("Loaded templates:");
         for template in engine.get_template_names() {
-            println!("{template}");
+            log::info!("{template}");
         }
 
         Ok(HtmlRenderer {

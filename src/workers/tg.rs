@@ -24,8 +24,8 @@ pub async fn download_pic(
         Some(photo) => {
             let photo_out: std::path::PathBuf =
                 ctx.output_dir.join(format!("{}.png", task.channel_name));
-            println!(
-                "Path to pic for channed t.me/{} {}",
+            log::trace!(
+                "Path to pic for channel t.me/{} {}",
                 task.channel_name,
                 photo_out.to_str().unwrap()
             );
@@ -48,9 +48,11 @@ pub async fn get_top_posts(client: grammers_client::Client, task: Task) -> Resul
     let mut posts = Post::get_by_date(&mut messages, task.from_date, task.to_date).await?;
 
     let post_top = TopPost::get_top(task.top_count, &mut posts);
-    println!(
+    log::debug!(
         "Fetched data for https://t.me/{} from {} to {}",
-        task.channel_name, task.from_date, task.to_date
+        task.channel_name,
+        task.from_date,
+        task.to_date
     );
 
     return Ok(post_top);

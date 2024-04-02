@@ -28,7 +28,7 @@ pub struct TelegramAPI {}
 
 impl TelegramAPI {
     async fn init_client() -> Result<grammers_client::client::Client> {
-        println!("Connecting to Telegram...");
+        log::info!("Connecting to Telegram...");
 
         let args = Args::parse_args();
 
@@ -57,10 +57,10 @@ impl TelegramAPI {
         })
         .await
         .expect("Can't connect to Telegram");
-        println!("Connected!");
+        log::info!("Connected!");
 
         if !client.is_authorized().await.expect("Authorization error") {
-            println!("Signing in...");
+            log::info!("Signing in...");
             let phone = prompt("Enter your phone number (international format): ")?;
             let token = client.request_login_code(&phone).await?;
             let code = prompt("Enter the code you received: ")?;
@@ -80,11 +80,11 @@ impl TelegramAPI {
                 Ok(_) => (),
                 Err(e) => panic!("{}", e),
             };
-            println!("Signed in!");
+            log::info!("Signed in!");
             match client.session().save_to_file(tg_session) {
                 Ok(_) => {}
                 Err(e) => {
-                    println!("Failed to save the session {}", e);
+                    log::error!("Failed to save the session {}", e);
                 }
             }
         }

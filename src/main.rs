@@ -159,7 +159,7 @@ async fn image(channel: &str) -> std::result::Result<NamedFile, status::Custom<S
         command: Commands::Digest {},
         ..Task::from_cli(&app.args)
     };
-    println!("Working on task: {}", task.to_string().unwrap());
+    log::debug!("Working on task: {}", task.to_string().unwrap());
 
     let file = app
         .ctx
@@ -273,7 +273,7 @@ async fn digest(
         to_date: to_date.unwrap_or(task.to_date),
         ..task
     };
-    println!("Working on task: {}", task.to_string().unwrap());
+    log::debug!("Working on task: {}", task.to_string().unwrap());
 
     if task.from_date < 0 || task.to_date < 0 {
         return http_status_err(Status::BadRequest, "Provided date is not allowed");
@@ -302,7 +302,7 @@ async fn digest(
             return http_status_err(Status::InternalServerError, e.to_string().as_ref());
         }
     };
-    println!("Digest html rendered: lenght={}", digest.len());
+    log::trace!("Digest html rendered: lenght={}", digest.len());
     Ok(content::RawHtml(digest))
 }
 
@@ -430,7 +430,7 @@ async fn video(
         to_date: to_date.unwrap_or(task.to_date),
         ..task
     };
-    println!("Working on task: {}", task.to_string().unwrap());
+    log::debug!("Working on task: {}", task.to_string().unwrap());
 
     let tg_task = task.clone();
     let client = tg::TelegramAPI::client();
@@ -451,7 +451,7 @@ async fn video(
         )
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
-    println!(
+    log::debug!(
         "Render file rendered to html: lenght={}",
         rendered_html.len()
     );
@@ -471,7 +471,7 @@ async fn video(
         .input_dir
         .join(format!("{}/make_video.sh", task.mode));
     let video_maker = path_util::to_slash(&video_maker).expect("Can't fix path to make_video.sh");
-    println!(
+    log::debug!(
         "Running bash: {} at {}",
         video_maker.to_str().unwrap_or("unknown"),
         output_dir.to_str().unwrap_or("unknown")
@@ -489,9 +489,9 @@ async fn video(
         .expect("Failed to execute script");
 
     // Print the output of the script
-    println!("Status: {}", output.status);
-    println!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
+    log::debug!("Status: {}", output.status);
+    log::debug!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
+    log::debug!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
 
     let file = output_dir.join("digest.mp4");
     NamedFile::open(file)
@@ -509,13 +509,13 @@ async fn main() {
     {
         match tg::TelegramAPI::create().await {
             Ok(_) => {
-                println!("Connected to Telegram");
+                log::info!("Connected to Telegram");
             }
             Err(e) => panic!("Error: {}", e),
         };
         match App::create().await {
             Ok(_) => {
-                println!(
+                log::info!(
                     "Loaded app with config from {}",
                     App::get().args.config.as_ref().unwrap().to_str().unwrap()
                 )

@@ -6,7 +6,7 @@ use crate::workers::block::Block;
 use crate::workers::card::Card;
 
 pub fn create_context(post_top: TopPost, task: Task) -> Result<RenderingContext> {
-    println!("Creating digest.html");
+    log::debug!("Creating digest.html");
     let get_posts = |action: ActionType| post_top.index(action);
     let blocks = vec![
         Block {

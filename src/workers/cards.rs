@@ -6,7 +6,7 @@ use crate::workers::card::Card;
 use crate::Commands::Cards;
 
 pub fn create_context(post_top: TopPost, task: Task) -> Result<RenderingContext> {
-    println!("Creating render.html and *.png cards");
+    log::debug!("Creating render.html and *.png cards");
     let card_post_index = match task.command {
         Cards {
             replies,
