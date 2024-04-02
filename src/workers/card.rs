@@ -22,18 +22,21 @@ impl Card {
         }
     }
 
-    pub fn create_card(post: &Post, action: ActionType) -> Card {
-        Card {
-            id: post.id,
-            count: post.count(action),
-            ..Card::default()
+    pub fn create_card(post: Option<&Post>, action: ActionType) -> Card {
+        match post {
+            None => Card::default(),
+            Some(post) => Card {
+                id: post.id,
+                count: post.count(action),
+                ..Card::default()
+            },
         }
     }
 
     pub fn create_cards(posts: &Vec<Post>, action: ActionType) -> Option<Vec<Card>> {
         match posts
             .iter()
-            .map(|p| Card::create_card(p, action))
+            .map(|p| Card::create_card(Some(p), action))
             .filter(|c| c.count.is_some())
             .collect::<Vec<Card>>()
         {

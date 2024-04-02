@@ -13,11 +13,14 @@ pub fn create_context(post_top: TopPost, task: Task) -> Result<RenderingContext>
             reactions,
             forwards,
             views,
-        } => [replies - 1, reactions - 1, forwards - 1, views - 1],
+        } => [replies, reactions, forwards, views],
         _ => panic!("Wrong command"),
     };
 
-    let get_post = |action: ActionType| &post_top.index(action)[card_post_index[action as usize]];
+    let get_post = |action: ActionType| match card_post_index[action as usize] {
+        Some(index) => Some(&post_top.index(action)[index]),
+        None => None,
+    };
     let cards = vec![
         Card {
             header: String::from("Лучший по комментариям"),

@@ -46,10 +46,10 @@ impl Args {
 pub enum Commands {
     /// Generate cards from chosen digest posts from 1 to <TOP_COUNT>
     Cards {
-        replies: usize,
-        reactions: usize,
-        forwards: usize,
-        views: usize,
+        replies: Option<usize>,
+        reactions: Option<usize>,
+        forwards: Option<usize>,
+        views: Option<usize>,
     },
 
     /// Generate digest
