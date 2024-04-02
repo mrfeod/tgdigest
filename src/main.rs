@@ -67,22 +67,23 @@ impl App {
     }
 
     async fn create() -> Result<&'static App> {
-        match APP.get() {
-            Some(app) => Ok(app),
-            None => {
-                let app = Self::new().await?;
-                APP.set(app).map_err(|_| "Can't set app")?;
-                Ok(APP.get().unwrap())
-            }
-        }
+        let app = Self::new().await?;
+        unsafe { Ok(APP.get_or_init(|| app)) }
     }
 
     fn get() -> &'static App {
-        APP.get().unwrap()
+        unsafe { APP.get().unwrap() }
+    }
+
+    async fn destroy() -> Result<()> {
+        unsafe {
+            APP.take().unwrap().card_renderer.close().await?;
+            Ok(())
+        }
     }
 }
 
-static APP: OnceCell<App> = OnceCell::new();
+static mut APP: OnceCell<App> = OnceCell::new();
 
 fn http_status(status: Status, msg: &str) -> status::Custom<String> {
     status::Custom(status, format!("{}: {}", status, msg))
@@ -541,8 +542,8 @@ async fn main() {
         )
         .launch()
         .and_then(|_| async {
-            // TODO Stop the browser
-            print!("Rocket server stopped");
+            App::destroy().await.unwrap();
+            log::info!("Rocket server stopped");
             Ok(())
         })
         .await
