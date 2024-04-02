@@ -8,7 +8,6 @@ use std::path::PathBuf;
 
 pub struct CardRenderer {
     browser: Browser,
-    handle: tokio::task::JoinHandle<()>,
 }
 
 impl CardRenderer {
@@ -31,7 +30,7 @@ impl CardRenderer {
         .await?;
 
         // spawn a new task that continuously polls the handler
-        let handle: tokio::task::JoinHandle<()> = tokio::task::spawn(async move {
+        tokio::task::spawn(async move {
             while let Some(h) = handler.next().await {
                 if h.is_err() {
                     println!("Browser handler error: {:?}", h.err().unwrap());
@@ -40,10 +39,10 @@ impl CardRenderer {
             }
         });
 
-        Ok(CardRenderer { browser, handle })
+        Ok(CardRenderer { browser })
     }
 
-    async fn render_page(&self, output_dir: &PathBuf, page: &chromiumoxide::Page) -> Result<()> {
+    async fn render_page(&self, output_dir: &PathBuf, page: chromiumoxide::Page) -> Result<()> {
         let cards = page.find_elements("div").await?;
 
         for (i, card) in cards.iter().enumerate() {
@@ -54,19 +53,18 @@ impl CardRenderer {
             println!("Card rendered: {}", card_path.to_str().unwrap());
         }
 
+        page.close().await?;
         Ok(())
     }
 
     pub async fn render_url(&self, output_dir: &PathBuf, url: &str) -> Result<()> {
         println!("Opening URL for rendering: {url}");
         let page = self.browser.new_page(url).await?;
-
-        self.render_page(output_dir, &page).await
+        self.render_page(output_dir, page).await
     }
 
     pub async fn render_file(&self, output_dir: &PathBuf, file: &PathBuf) -> Result<()> {
         println!("Opening file for rendering: {}", file.to_str().unwrap());
-
         let url = String::from("file://") + file.to_str().unwrap();
         self.render_url(output_dir, url.as_str()).await
     }
@@ -75,12 +73,12 @@ impl CardRenderer {
         let page = self.browser.new_page("about:blank").await?;
         page.set_content(html).await?;
 
-        self.render_page(output_dir, &page).await
+        self.render_page(output_dir, page).await
     }
 
-    pub async fn close(&mut self) -> Result<()> {
+    pub async fn close(mut self) -> Result<()> {
         self.browser.close().await?;
-        self.handle.abort();
+        self.browser.wait().await?;
         Ok(())
     }
 }
