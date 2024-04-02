@@ -23,6 +23,7 @@ use chrono::Datelike;
 use chrono::Days;
 use chrono::Months;
 use chrono::Utc;
+use futures_util::TryFutureExt;
 use log;
 use once_cell::sync::OnceCell;
 use rocket::fs::NamedFile;
@@ -496,7 +497,7 @@ async fn video(
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))
 }
 
-#[tokio::main]
+#[rocket::main]
 async fn main() {
     SimpleLogger::new()
         .with_level(log::LevelFilter::Debug)
@@ -538,6 +539,11 @@ async fn main() {
             ],
         )
         .launch()
+        .and_then(|r: rocket::Rocket<rocket::Ignite>| async {
+            // TODO Stop the browser
+            print!("Rocket server stopped");
+            Ok(())
+        })
         .await
         .unwrap();
 }
