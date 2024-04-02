@@ -17,8 +17,24 @@ pub fn create_context(post_top: TopPost, task: Task) -> Result<RenderingContext>
         _ => panic!("Wrong command"),
     };
 
+    let out_of_range = card_post_index
+        .iter()
+        .filter(|&x| match x {
+            Some(x) => x < &1 || x > &post_top.top_count,
+            None => false,
+        })
+        .count()
+        > 0;
+    if out_of_range {
+        return Err(format!(
+            "Index of replies/reactions/forwards/views out of range [1;{}]",
+            post_top.top_count
+        )
+        .into());
+    }
+
     let get_post = |action: ActionType| match card_post_index[action as usize] {
-        Some(index) => Some(&post_top.index(action)[index]),
+        Some(index) => Some(&post_top.index(action)[index - 1]),
         None => None,
     };
     let cards = vec![
