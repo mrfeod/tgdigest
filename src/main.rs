@@ -432,6 +432,10 @@ async fn video(
     };
     log::debug!("Working on task: {}", task.to_string().unwrap());
 
+    if task.from_date < 0 || task.to_date < 0 {
+        return http_status_err(Status::BadRequest, "Provided date is not allowed");
+    }
+
     let tg_task = task.clone();
     let client = tg::TelegramAPI::client();
     let post_top = workers::tg::get_top_posts(client, tg_task)
