@@ -10,8 +10,10 @@ rocket = { version = "0.5.0"}
 clap = { version = "4.4.8", features = ["derive"] }
 # grammers-client = { path = "../grammers/lib/grammers-client", features = ["unstable_raw"] }
 # grammers-session = { path = "../grammers/lib/grammers-session" }
-grammers-client = { git = "https://github.com/Lonami/grammers.git", branch = "master", features = ["unstable_raw"] }
-grammers-session = { git = "https://github.com/Lonami/grammers.git" , branch = "master" }
+# grammers-client = { git = "https://github.com/Lonami/grammers.git", branch = "master", features = ["unstable_raw"] }
+# grammers-session = { git = "https://github.com/Lonami/grammers.git" , branch = "master" }
+grammers-client = { git = "https://github.com/mrfeod/grammers.git", branch = "master", features = ["unstable_raw"] }
+grammers-session = { git = "https://github.com/mrfeod/grammers.git" , branch = "master" }
 tokio = { version =  "1.33.0", features = ["signal"] }
 simple_logger = "4.2.0"
 futures-util = "0.3.28"

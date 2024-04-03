@@ -514,44 +514,46 @@ async fn video(
 
 #[rocket::main]
 async fn main() {
-    SimpleLogger::new()
-        .with_level(log::LevelFilter::Debug)
-        .init()
-        .unwrap();
+    #[cfg(debug_assertions)]
+    let log_level = log::LevelFilter::Debug;
+    #[cfg(not(debug_assertions))]
+    let log_level = log::LevelFilter::Info;
+    SimpleLogger::new().with_level(log_level).init().unwrap();
+    log::debug!("Debug mode");
 
-    {
-        match tg::TelegramAPI::create().await {
-            Ok(_) => {
-                log::info!("Connected to Telegram");
-                tokio::task::spawn(async {
-                    let tg = tg::TelegramAPI::client();
-                    let tg_ping_timeout = std::time::Duration::from_secs(60);
-                    let tg_error_exit_code = -1;
-                    loop {
-                        match tg.resolve_username("ithueti").await {
-                            Ok(_) => log::debug!("Telegram ping successful"),
-                            Err(e) => {
-                                log::error!("Telegram ping failed: {}", e);
-                                App::destroy().await.unwrap();
-                                std::process::exit(tg_error_exit_code);
-                            }
+    match tg::TelegramAPI::create().await {
+        Ok(_) => {
+            log::info!("Connected to Telegram");
+            tokio::task::spawn(async {
+                let tg = tg::TelegramAPI::client();
+                let tg_ping_timeout = std::time::Duration::from_secs(60);
+                let tg_error_exit_code = -1;
+                loop {
+                    // Ping Telegram to keep connection alive
+                    match tg.get_me().await {
+                        Ok(_) => log::debug!("Telegram ping successful"),
+                        Err(e) => {
+                            log::error!("Telegram ping failed: {}", e);
+                            App::destroy().await.unwrap();
+                            std::process::exit(tg_error_exit_code);
                         }
-                        tokio::time::sleep(tg_ping_timeout).await;
                     }
-                });
-            }
-            Err(e) => panic!("Error: {}", e),
-        };
-        match App::create().await {
-            Ok(_) => {
-                log::info!(
-                    "Loaded app with config from {}",
-                    App::get().args.config.as_ref().unwrap().to_str().unwrap()
-                )
-            }
-            Err(e) => panic!("Error: {}", e),
-        };
-    }
+                    tokio::time::sleep(tg_ping_timeout).await;
+                }
+            });
+        }
+        Err(e) => panic!("Error: {}", e),
+    };
+
+    match App::create().await {
+        Ok(_) => {
+            log::info!(
+                "Loaded app with config from {}",
+                App::get().args.config.as_ref().unwrap().to_str().unwrap()
+            )
+        }
+        Err(e) => panic!("Error: {}", e),
+    };
 
     rocket::build()
         .mount(
