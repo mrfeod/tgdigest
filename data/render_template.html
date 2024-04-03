@@ -21,7 +21,7 @@
                     <th><img src="pic.png" height="24" onerror="this.style.display='none'" /></th>
                     <th>
                         <h2>{{ card.header }} <img src="{{ card.icon }}" height="24" /> {{
-                            card.count }}</h2>
+                            card.count | format_number }}</h2>
                     </th>
                 </tr>
             </thead>
