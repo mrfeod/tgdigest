@@ -15,6 +15,7 @@ fn format_number(
         Some(n) => n.to_string(),
         None => return Err(tera::Error::msg("Argument is not a number")),
     };
+    let thin_space = "\u{2009}";
     let formatted = number
         .chars()
         .rev()
@@ -22,7 +23,7 @@ fn format_number(
         .chunks(3)
         .map(|chunk| chunk.iter().collect::<String>())
         .collect::<Vec<String>>()
-        .join(" ")
+        .join(thin_space)
         .chars()
         .rev()
         .collect::<String>();
