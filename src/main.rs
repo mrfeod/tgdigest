@@ -514,10 +514,10 @@ async fn video(
 
 #[rocket::main]
 async fn main() {
-    #[cfg(debug_assertions)]
+    // #[cfg(debug_assertions)]
     let log_level = log::LevelFilter::Debug;
-    #[cfg(not(debug_assertions))]
-    let log_level = log::LevelFilter::Info;
+    // #[cfg(not(debug_assertions))]
+    // let log_level = log::LevelFilter::Info;
     SimpleLogger::new().with_level(log_level).init().unwrap();
     log::debug!("Debug mode");
 

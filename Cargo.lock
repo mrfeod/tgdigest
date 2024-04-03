@@ -848,7 +848,7 @@ dependencies = [
 [[package]]
 name = "grammers-client"
 version = "0.5.0"
-source = "git+https://github.com/mrfeod/grammers.git?branch=master#a9f25b7ed56d0ca9b8e5644f3439948949b72169"
+source = "git+https://github.com/mrfeod/grammers.git?branch=master#4946a4df7cc0d3efb46846376b1fff54a22ec986"
 dependencies = [
  "chrono",
  "futures-util",
@@ -870,7 +870,7 @@ dependencies = [
 [[package]]
 name = "grammers-crypto"
 version = "0.6.0"
-source = "git+https://github.com/mrfeod/grammers.git?branch=master#a9f25b7ed56d0ca9b8e5644f3439948949b72169"
+source = "git+https://github.com/mrfeod/grammers.git?branch=master#4946a4df7cc0d3efb46846376b1fff54a22ec986"
 dependencies = [
  "aes",
  "getrandom",
@@ -885,7 +885,7 @@ dependencies = [
 [[package]]
 name = "grammers-mtproto"
 version = "0.5.0"
-source = "git+https://github.com/mrfeod/grammers.git?branch=master#a9f25b7ed56d0ca9b8e5644f3439948949b72169"
+source = "git+https://github.com/mrfeod/grammers.git?branch=master#4946a4df7cc0d3efb46846376b1fff54a22ec986"
 dependencies = [
  "bytes",
  "crc32fast",
@@ -901,7 +901,7 @@ dependencies = [
 [[package]]
 name = "grammers-mtsender"
 version = "0.5.0"
-source = "git+https://github.com/mrfeod/grammers.git?branch=master#a9f25b7ed56d0ca9b8e5644f3439948949b72169"
+source = "git+https://github.com/mrfeod/grammers.git?branch=master#4946a4df7cc0d3efb46846376b1fff54a22ec986"
 dependencies = [
  "bytes",
  "futures-util",
@@ -916,7 +916,7 @@ dependencies = [
 [[package]]
 name = "grammers-session"
 version = "0.5.1"
-source = "git+https://github.com/mrfeod/grammers.git?branch=master#a9f25b7ed56d0ca9b8e5644f3439948949b72169"
+source = "git+https://github.com/mrfeod/grammers.git?branch=master#4946a4df7cc0d3efb46846376b1fff54a22ec986"
 dependencies = [
  "grammers-crypto",
  "grammers-tl-gen",
@@ -928,7 +928,7 @@ dependencies = [
 [[package]]
 name = "grammers-tl-gen"
 version = "0.5.1"
-source = "git+https://github.com/mrfeod/grammers.git?branch=master#a9f25b7ed56d0ca9b8e5644f3439948949b72169"
+source = "git+https://github.com/mrfeod/grammers.git?branch=master#4946a4df7cc0d3efb46846376b1fff54a22ec986"
 dependencies = [
  "grammers-tl-parser",
 ]
@@ -936,7 +936,7 @@ dependencies = [
 [[package]]
 name = "grammers-tl-parser"
 version = "1.1.1"
-source = "git+https://github.com/mrfeod/grammers.git?branch=master#a9f25b7ed56d0ca9b8e5644f3439948949b72169"
+source = "git+https://github.com/mrfeod/grammers.git?branch=master#4946a4df7cc0d3efb46846376b1fff54a22ec986"
 dependencies = [
  "crc32fast",
 ]
@@ -944,7 +944,7 @@ dependencies = [
 [[package]]
 name = "grammers-tl-types"
 version = "0.5.1"
-source = "git+https://github.com/mrfeod/grammers.git?branch=master#a9f25b7ed56d0ca9b8e5644f3439948949b72169"
+source = "git+https://github.com/mrfeod/grammers.git?branch=master#4946a4df7cc0d3efb46846376b1fff54a22ec986"
 dependencies = [
  "grammers-tl-gen",
  "grammers-tl-parser",
@@ -1507,9 +1507,9 @@ checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
 
 [[package]]
 name = "pest"
-version = "2.7.8"
+version = "2.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56f8023d0fb78c8e03784ea1c7f3fa36e68a723138990b8d5a47d916b651e7a8"
+checksum = "311fb059dee1a7b802f036316d790138c613a4e8b180c822e3925a662e9f0c95"
 dependencies = [
  "memchr",
  "thiserror",
@@ -1518,9 +1518,9 @@ dependencies = [
 
 [[package]]
 name = "pest_derive"
-version = "2.7.8"
+version = "2.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0d24f72393fd16ab6ac5738bc33cdb6a9aa73f8b902e8fe29cf4e67d7dd1026"
+checksum = "f73541b156d32197eecda1a4014d7f868fd2bcb3c550d5386087cfba442bf69c"
 dependencies = [
  "pest",
  "pest_generator",
@@ -1528,9 +1528,9 @@ dependencies = [
 
 [[package]]
 name = "pest_generator"
-version = "2.7.8"
+version = "2.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdc17e2a6c7d0a492f0158d7a4bd66cc17280308bbaff78d5bef566dca35ab80"
+checksum = "c35eeed0a3fab112f75165fdc026b3913f4183133f19b49be773ac9ea966e8bd"
 dependencies = [
  "pest",
  "pest_meta",
@@ -1541,9 +1541,9 @@ dependencies = [
 
 [[package]]
 name = "pest_meta"
-version = "2.7.8"
+version = "2.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "934cd7631c050f4674352a6e835d5f6711ffbfb9345c2fc0107155ac495ae293"
+checksum = "2adbf29bb9776f28caece835398781ab24435585fe0d4dc1374a61db5accedca"
 dependencies = [
  "once_cell",
  "pest",
@@ -2086,9 +2086,9 @@ dependencies = [
 
 [[package]]
 name = "strsim"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ee073c9e4cd00e28217186dbe12796d692868f432bf2e97ee73bed0c56dfa01"
+checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "substring"
@@ -2107,9 +2107,9 @@ checksum = "81cdd64d312baedb58e21336b31bc043b77e01cc99033ce76ef539f78e965ebc"
 
 [[package]]
 name = "syn"
-version = "2.0.57"
+version = "2.0.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11a6ae1e52eb25aab8f3fb9fca13be982a373b8f1157ca14b897a825ba4a2d35"
+checksum = "44cfb93f38070beee36b3fef7d4f5a16f27751d94b187b666a5cc5e9b0d30687"
 dependencies = [
  "proc-macro2",
  "quote",
