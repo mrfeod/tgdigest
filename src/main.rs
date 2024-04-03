@@ -145,6 +145,16 @@ fn get_date_from_week(
     }
 }
 
+#[get("/favicon.ico")]
+async fn favicon() -> Option<NamedFile> {
+    let app = App::get();
+    let path = app.ctx.input_dir.join("favicon.ico");
+    match path.exists() {
+        false => None,
+        _ => NamedFile::open(path).await.ok(),
+    }
+}
+
 #[get("/")]
 async fn index() -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     return digest("ithueti", "ithueti", None, None, None, None).await;
