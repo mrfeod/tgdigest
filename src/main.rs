@@ -523,6 +523,22 @@ async fn main() {
         match tg::TelegramAPI::create().await {
             Ok(_) => {
                 log::info!("Connected to Telegram");
+                tokio::task::spawn(async {
+                    let tg = tg::TelegramAPI::client();
+                    let tg_ping_timeout = std::time::Duration::from_secs(60);
+                    let tg_error_exit_code = -1;
+                    loop {
+                        match tg.resolve_username("ithueti").await {
+                            Ok(_) => log::debug!("Telegram ping successful"),
+                            Err(e) => {
+                                log::error!("Telegram ping failed: {}", e);
+                                App::destroy().await.unwrap();
+                                std::process::exit(tg_error_exit_code);
+                            }
+                        }
+                        tokio::time::sleep(tg_ping_timeout).await;
+                    }
+                });
             }
             Err(e) => panic!("Error: {}", e),
         };
@@ -541,6 +557,7 @@ async fn main() {
         .mount(
             "/",
             routes![
+                favicon,
                 index,
                 image,
                 digest_by_week,
