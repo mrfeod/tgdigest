@@ -72,6 +72,8 @@ impl CardRenderer {
     pub async fn render_html(&self, output_dir: &PathBuf, html: &str) -> Result<()> {
         let page = self.browser.new_page("about:blank").await?;
         page.set_content(html).await?;
+        page.wait_for_navigation().await?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
         self.render_page(output_dir, page).await
     }
