@@ -60,6 +60,7 @@ impl App {
 }
 
 fn http_status(status: Status, msg: &str) -> status::Custom<String> {
+    log::info!("HTTP status {}: {}", status.to_string(), msg);
     status::Custom(status, format!("{}: {}", status, msg))
 }
 
