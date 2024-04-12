@@ -10,28 +10,21 @@ mod tg;
 mod util;
 mod workers;
 
-use std::process::Command;
-
 use crate::card_renderer::CardRenderer;
 use crate::cli::*;
 use crate::html_renderer::HtmlRenderer;
 use crate::task::*;
 use crate::util::*;
 
-use chrono::DateTime;
-use chrono::Datelike;
-use chrono::Days;
-use chrono::Months;
-use chrono::Utc;
-use futures_util::TryFutureExt;
-use log;
-use once_cell::sync::OnceCell;
+use chrono::{DateTime, Datelike, Days, Months, Utc};
 use rocket::fs::NamedFile;
 use rocket::http::Status;
 use rocket::response::content;
 use rocket::response::content::RawHtml;
 use rocket::response::status;
 use simple_logger::SimpleLogger;
+use std::process::Command;
+use std::sync::Arc;
 
 #[macro_use]
 extern crate rocket;
@@ -64,25 +57,7 @@ impl App {
             card_renderer,
         })
     }
-
-    async fn create() -> Result<&'static App> {
-        let app = Self::new().await?;
-        unsafe { Ok(APP.get_or_init(|| app)) }
-    }
-
-    fn get() -> &'static App {
-        unsafe { APP.get().unwrap() }
-    }
-
-    async fn destroy() -> Result<()> {
-        unsafe {
-            APP.take().unwrap().card_renderer.close().await?;
-            Ok(())
-        }
-    }
 }
-
-static mut APP: OnceCell<App> = OnceCell::new();
 
 fn http_status(status: Status, msg: &str) -> status::Custom<String> {
     status::Custom(status, format!("{}: {}", status, msg))
@@ -146,8 +121,7 @@ fn get_date_from_week(
 }
 
 #[get("/favicon.ico")]
-async fn favicon() -> Option<NamedFile> {
-    let app = App::get();
+async fn favicon(app: &rocket::State<Arc<App>>) -> Option<NamedFile> {
     let path = app.ctx.input_dir.join("favicon.ico");
     match path.exists() {
         false => None,
@@ -156,13 +130,17 @@ async fn favicon() -> Option<NamedFile> {
 }
 
 #[get("/")]
-async fn index() -> std::result::Result<RawHtml<String>, status::Custom<String>> {
-    return digest("ithueti", "ithueti", None, None, None, None).await;
+async fn index(
+    app: &rocket::State<Arc<App>>,
+) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
+    return digest("ithueti", "ithueti", None, None, None, None, app).await;
 }
 
 #[get("/pic/<channel>")]
-async fn image(channel: &str) -> std::result::Result<NamedFile, status::Custom<String>> {
-    let app = App::get();
+async fn image(
+    channel: &str,
+    app: &rocket::State<Arc<App>>,
+) -> std::result::Result<NamedFile, status::Custom<String>> {
     let task = Task {
         channel_name: channel.to_string(),
         command: Commands::Digest {},
@@ -200,6 +178,7 @@ async fn digest_by_week(
     week: u32,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
+    app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let from_date = get_date_from_week(year, month, week)?;
     let to_date = from_date.checked_add_days(Days::new(7)).unwrap();
@@ -211,6 +190,7 @@ async fn digest_by_week(
         editor_choice,
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
+        app,
     )
     .await
 }
@@ -223,6 +203,7 @@ async fn digest_by_month(
     month: u32,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
+    app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let from_date = get_date_from_month(year, month)?;
 
@@ -235,6 +216,7 @@ async fn digest_by_month(
         editor_choice,
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
+        app,
     )
     .await
 }
@@ -246,6 +228,7 @@ async fn digest_by_year(
     year: i32,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
+    app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let from_date = get_date_from_year(year)?;
     let to_date = from_date.checked_add_months(Months::new(12)).unwrap();
@@ -257,6 +240,7 @@ async fn digest_by_year(
         editor_choice,
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
+        app,
     )
     .await
 }
@@ -269,8 +253,8 @@ async fn digest(
     editor_choice: Option<i32>,
     from_date: Option<i64>,
     to_date: Option<i64>,
+    app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
-    let app = App::get();
     let task = Task::from_cli(&app.args);
     let task = Task {
         command: Commands::Digest {},
@@ -328,6 +312,7 @@ async fn video_by_week(
     views: Option<usize>,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
+    app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<NamedFile, status::Custom<String>> {
     let from_date = get_date_from_week(year, month, week)?;
     let to_date = from_date.checked_add_days(Days::new(7)).unwrap();
@@ -343,6 +328,7 @@ async fn video_by_week(
         editor_choice,
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
+        app,
     )
     .await
 }
@@ -359,6 +345,7 @@ async fn video_by_month(
     views: Option<usize>,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
+    app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<NamedFile, status::Custom<String>> {
     let from_date = get_date_from_month(year, month)?;
 
@@ -375,6 +362,7 @@ async fn video_by_month(
         editor_choice,
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
+        app,
     )
     .await
 }
@@ -390,6 +378,7 @@ async fn video_by_year(
     views: Option<usize>,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
+    app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<NamedFile, status::Custom<String>> {
     let from_date = get_date_from_year(year)?;
     let to_date = from_date.checked_add_months(Months::new(12)).unwrap();
@@ -405,6 +394,7 @@ async fn video_by_year(
         editor_choice,
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
+        app,
     )
     .await
 }
@@ -421,8 +411,8 @@ async fn video(
     editor_choice: Option<i32>,
     from_date: Option<i64>,
     to_date: Option<i64>,
+    app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<NamedFile, status::Custom<String>> {
-    let app = App::get();
     let task = Task::from_cli(&app.args);
     let task = Task {
         command: Commands::Cards {
@@ -454,7 +444,7 @@ async fn video(
     let render_context = workers::cards::create_context(post_top, task.clone())
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
-    image(channel).await?;
+    image(channel, app).await?;
 
     let rendered_html = app
         .html_renderer
@@ -521,36 +511,40 @@ async fn main() {
     SimpleLogger::new().with_level(log_level).init().unwrap();
     log::debug!("Debug mode");
 
-    match tg::TelegramAPI::create().await {
+    let app = match App::new().await {
+        Ok(app) => {
+            log::info!(
+                "Loaded app with config from {}",
+                app.args.config.as_ref().unwrap().to_str().unwrap()
+            );
+            app
+        }
+        Err(e) => panic!("Error: {}", e),
+    };
+    let mut app = Arc::new(app);
+
+    match tg::TelegramAPI::create(&app.ctx).await {
         Ok(_) => {
             log::info!("Connected to Telegram");
-            tokio::task::spawn(async {
+            rocket::tokio::task::spawn(async {
                 let tg = tg::TelegramAPI::client();
                 let tg_ping_timeout = std::time::Duration::from_secs(60);
                 let tg_error_exit_code = -1;
                 loop {
+                    rocket::tokio::time::sleep(tg_ping_timeout).await;
                     // Ping Telegram to keep connection alive
                     match tg.get_me().await {
-                        Ok(_) => log::debug!("Telegram ping successful"),
+                        Ok(_) => {
+                            log::debug!("Telegram ping successful");
+                        }
                         Err(e) => {
                             log::error!("Telegram ping failed: {}", e);
-                            App::destroy().await.unwrap();
+                            // TODO Graceful shutdown on errors
                             std::process::exit(tg_error_exit_code);
                         }
                     }
-                    tokio::time::sleep(tg_ping_timeout).await;
                 }
             });
-        }
-        Err(e) => panic!("Error: {}", e),
-    };
-
-    match App::create().await {
-        Ok(_) => {
-            log::info!(
-                "Loaded app with config from {}",
-                App::get().args.config.as_ref().unwrap().to_str().unwrap()
-            )
         }
         Err(e) => panic!("Error: {}", e),
     };
@@ -572,12 +566,12 @@ async fn main() {
                 video
             ],
         )
+        .manage(app.clone())
         .launch()
-        .and_then(|_| async {
-            App::destroy().await.unwrap();
-            log::info!("Rocket server stopped");
-            Ok(())
-        })
         .await
         .unwrap();
+
+    log::info!("Rocket server stopped");
+    let app = Arc::get_mut(&mut app).unwrap();
+    app.card_renderer.close().await.unwrap();
 }

@@ -1,7 +1,6 @@
 use crate::context;
 use crate::path_util;
 use crate::util::*;
-use crate::Args;
 
 use grammers_client::{Client, Config, SignInError};
 use grammers_session::Session;
@@ -27,17 +26,8 @@ fn prompt(message: &str) -> Result<String> {
 pub struct TelegramAPI {}
 
 impl TelegramAPI {
-    async fn init_client() -> Result<grammers_client::client::Client> {
+    async fn init_client(ctx: &context::AppContext) -> Result<grammers_client::client::Client> {
         log::info!("Connecting to Telegram...");
-
-        let args = Args::parse_args();
-
-        let ctx = match context::AppContext::new(args.config.clone()) {
-            Ok(ctx) => ctx,
-            Err(e) => {
-                panic!("Error: {}", e);
-            }
-        };
 
         let api_id = ctx.tg_id;
         let api_hash = ctx.tg_hash.clone();
@@ -92,11 +82,11 @@ impl TelegramAPI {
         Ok(client)
     }
 
-    pub async fn create() -> Result<TelegramAPI> {
+    pub async fn create(ctx: &context::AppContext) -> Result<TelegramAPI> {
         match TG.get() {
             Some(_) => Ok(TelegramAPI {}),
             None => {
-                let client = Self::init_client().await?;
+                let client = Self::init_client(ctx).await?;
                 TG.set(client).unwrap();
                 Ok(TelegramAPI {})
             }
