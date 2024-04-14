@@ -496,6 +496,10 @@ async fn video(
     log::debug!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
     log::debug!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
 
+    if !output.status.success() {
+        return http_status_err(Status::InternalServerError, "Failed to make a video");
+    }
+
     let file = output_dir.join("digest.mp4");
     NamedFile::open(file)
         .await
