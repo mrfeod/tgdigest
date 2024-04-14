@@ -573,5 +573,8 @@ async fn main() {
 
     log::info!("Rocket server stopped");
     let app = Arc::get_mut(&mut app).unwrap();
-    app.card_renderer.close().await.unwrap();
+    match app.card_renderer.close().await {
+        Ok(_) => log::info!("Browser closed"),
+        Err(e) => log::error!("{}", e),
+    }
 }

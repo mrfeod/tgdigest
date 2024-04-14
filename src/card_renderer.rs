@@ -81,7 +81,9 @@ impl CardRenderer {
     pub async fn close(&mut self) -> Result<()> {
         log::info!("Closing browser...");
         self.browser.close().await?;
-        self.browser.wait().await?;
-        Ok(())
+        match self.browser.wait().await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 }
