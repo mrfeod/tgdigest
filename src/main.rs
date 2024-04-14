@@ -483,11 +483,10 @@ async fn video(
     let mut command = if cfg!(windows) {
         Command::new("C:/Program Files/Git/usr/bin/bash.exe")
     } else {
-        Command::new("/bin/bash")
+        Command::new("bash")
     };
     let output = command
         .current_dir(output_dir.to_str().unwrap())
-        .arg("-c")
         .arg(video_maker)
         .output()
         .expect("Failed to execute script");
