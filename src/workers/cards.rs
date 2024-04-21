@@ -1,4 +1,5 @@
 use crate::action::ActionType;
+use crate::post::Post;
 use crate::post::TopPost;
 use crate::task::Task;
 use crate::util::*;
@@ -6,7 +7,6 @@ use crate::workers::card::Card;
 use crate::Commands::Cards;
 
 pub fn create_context(post_top: TopPost, task: Task) -> Result<RenderingContext> {
-    log::debug!("Creating render.html and *.png cards");
     let card_post_index = match task.command {
         Cards {
             replies,
@@ -66,6 +66,21 @@ pub fn create_context(post_top: TopPost, task: Task) -> Result<RenderingContext>
     let mut context = RenderingContext::new();
     context.insert("cards", &cards);
     context.insert("editor_choice_id", &task.editor_choice_post_id);
+    context.insert("channel_name", &task.channel_name.as_str());
+
+    Ok(context)
+}
+
+pub fn create_post_context(post: Post, task: Task) -> Result<RenderingContext> {
+    let mut context = RenderingContext::new();
+    context.insert("id", &post.id);
+    context.insert("date", &post.date);
+    context.insert("message", &post.message);
+    context.insert("image", &post.image);
+    context.insert("replies", &post.replies);
+    context.insert("reactions", &post.reactions);
+    context.insert("forwards", &post.forwards);
+    context.insert("views", &post.views);
     context.insert("channel_name", &task.channel_name.as_str());
 
     Ok(context)

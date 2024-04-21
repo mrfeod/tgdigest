@@ -4,7 +4,7 @@ use crate::util::Result;
 use chrono::{DateTime, Utc};
 use partial_sort::PartialSort;
 
-#[derive(Copy, Clone, serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 pub struct Post {
     pub date: i64,
     pub id: i32,
@@ -12,6 +12,8 @@ pub struct Post {
     pub forwards: Option<i32>,
     pub replies: Option<i32>,
     pub reactions: Option<i32>,
+    pub message: Option<String>,
+    pub image: Option<i64>,
 }
 
 impl Post {
@@ -32,7 +34,6 @@ impl Post {
                 break;
             }
 
-            // let text = message.text().substring(0, 21);
             posts.push(Post {
                 date: date,
                 id: message.id(),
@@ -40,6 +41,8 @@ impl Post {
                 forwards: message.forward_count(),
                 replies: message.reply_count(),
                 reactions: message.reaction_count(),
+                message: Some(message.msg.message),
+                image: None,
             });
         }
 

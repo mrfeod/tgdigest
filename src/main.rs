@@ -506,6 +506,43 @@ async fn video(
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))
 }
 
+#[get("/post/<channel>/<id>")]
+async fn post_json(
+    channel: &str,
+    id: i32,
+    app: &rocket::State<Arc<App>>,
+) -> std::result::Result<rocket::serde::json::Json<post::Post>, status::Custom<String>> {
+    let task = Task::from_cli(&app.args);
+    let task = Task {
+        command: Commands::Post {},
+        channel_name: channel.to_string(),
+        editor_choice_post_id: id,
+        ..task
+    };
+    log::debug!("Working on task: {}", task.to_string().unwrap());
+
+    let tg_task = task.clone();
+    let client = tg::TelegramAPI::client();
+
+    let post = workers::tg::get_post(client, tg_task, &app.ctx)
+        .await
+        .map_err(|e| http_status(Status::NotFound, e.to_string().as_ref()))?;
+
+    Ok(rocket::serde::json::Json(post))
+}
+
+#[get("/img/<id>")]
+async fn post_image(
+    id: i64,
+    app: &rocket::State<Arc<App>>,
+) -> std::result::Result<NamedFile, status::Custom<String>> {
+    let file = app.ctx.output_dir.join(format!("{}.jpg", id));
+    log::debug!("Trying to open file: {}", file.to_str().unwrap());
+    NamedFile::open(file)
+        .await
+        .map_err(|e| http_status(Status::NotFound, e.to_string().as_ref()))
+}
+
 #[rocket::main]
 async fn main() {
     // #[cfg(debug_assertions)]
@@ -567,7 +604,9 @@ async fn main() {
                 video_by_week,
                 video_by_month,
                 video_by_year,
-                video
+                video,
+                post_json,
+                post_image
             ],
         )
         .manage(app.clone())

@@ -54,4 +54,7 @@ pub enum Commands {
 
     /// Generate digest
     Digest {},
+
+    /// Show post
+    Post {},
 }

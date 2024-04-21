@@ -1,3 +1,5 @@
+use grammers_client::types::{Downloadable, Media};
+
 use crate::context::AppContext;
 use crate::post::*;
 use crate::task::Task;
@@ -56,4 +58,49 @@ pub async fn get_top_posts(client: grammers_client::Client, task: Task) -> Resul
     );
 
     return Ok(post_top);
+}
+
+pub async fn get_post(
+    client: grammers_client::Client,
+    task: Task,
+    ctx: &AppContext,
+) -> Result<Post> {
+    let channel = get_channel(&client, task.channel_name.as_str()).await?;
+    let message = client
+        .get_messages_by_id(channel, &[task.editor_choice_post_id])
+        .await?
+        .pop()
+        .unwrap();
+
+    match message {
+        Some(message) => {
+            let photo_id = match message.photo() {
+                Some(photo) => {
+                    let photo_id = photo.id();
+                    let photo_dowloadable = Downloadable::Media(Media::Photo(photo));
+                    let photo_out: std::path::PathBuf =
+                        ctx.output_dir.join(format!("{}.jpg", photo_id));
+                    client.download_media(&photo_dowloadable, photo_out).await?;
+                    Some(photo_id)
+                }
+                None => None,
+            };
+
+            Ok(Post {
+                date: message.date().timestamp(),
+                id: message.id(),
+                views: message.view_count(),
+                forwards: message.forward_count(),
+                replies: message.reply_count(),
+                reactions: message.reaction_count(),
+                message: Some(message.msg.message),
+                image: photo_id,
+            })
+        }
+        None => Err(format!(
+            "Can't find post t.me/{}/{}",
+            task.channel_name, task.editor_choice_post_id
+        )
+        .into()),
+    }
 }
