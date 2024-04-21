@@ -40,7 +40,7 @@ impl App {
     async fn new() -> Result<App> {
         let args = Args::parse_args();
 
-        let ctx = match context::AppContext::new(args.config.clone()) {
+        let ctx = match context::AppContext::new(&args.config) {
             Ok(ctx) => ctx,
             Err(e) => {
                 panic!("Error: {}", e);
@@ -145,7 +145,7 @@ async fn image(
     let task = Task {
         channel_name: channel.to_string(),
         command: Commands::Digest {},
-        ..Task::from_cli(&app.args)
+        ..Task::default()
     };
     log::debug!("Working on task: {}", task.to_string().unwrap());
 
@@ -256,7 +256,7 @@ async fn digest(
     to_date: Option<i64>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
-    let task = Task::from_cli(&app.args);
+    let task = Task::default();
     let task = Task {
         command: Commands::Digest {},
         mode: mode.to_string(),
@@ -414,7 +414,7 @@ async fn video(
     to_date: Option<i64>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<NamedFile, status::Custom<String>> {
-    let task = Task::from_cli(&app.args);
+    let task = Task::default();
     let task = Task {
         command: Commands::Cards {
             replies,
@@ -443,7 +443,7 @@ async fn video(
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
     let render_context = workers::cards::create_context(post_top, task.clone())
-        .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+        .map_err(|e| http_status(Status::BadRequest, e.to_string().as_ref()))?;
 
     image(channel, app).await?;
 
@@ -512,12 +512,11 @@ async fn post_json(
     id: i32,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<rocket::serde::json::Json<post::Post>, status::Custom<String>> {
-    let task = Task::from_cli(&app.args);
     let task = Task {
         command: Commands::Post {},
         channel_name: channel.to_string(),
         editor_choice_post_id: id,
-        ..task
+        ..Task::default()
     };
     log::debug!("Working on task: {}", task.to_string().unwrap());
 
@@ -556,7 +555,7 @@ async fn main() {
         Ok(app) => {
             log::info!(
                 "Loaded app with config from {}",
-                app.args.config.as_ref().unwrap().to_str().unwrap()
+                app.args.config.to_str().unwrap()
             );
             app
         }

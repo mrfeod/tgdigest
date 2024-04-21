@@ -62,6 +62,11 @@ pub fn create_context(post_top: TopPost, task: Task) -> Result<RenderingContext>
         },
     ];
     let cards: Vec<Card> = cards.into_iter().filter(|c| c.count.is_some()).collect();
+    if cards.is_empty() {
+        return Err(
+            "Set at least one index of replies/reactions/forwards/views/editor_choice".into(),
+        );
+    }
 
     let mut context = RenderingContext::new();
     context.insert("cards", &cards);

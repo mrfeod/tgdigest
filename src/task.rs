@@ -30,17 +30,17 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn from_cli(cli: &Args) -> Self {
+    pub fn default() -> Self {
         let current_date = DateTime::<Utc>::from_timestamp(Local::now().timestamp(), 0).unwrap();
         let week_ago = current_date - chrono::Duration::days(7);
         Task {
-            command: cli.command.clone(),
-            channel_name: cli.channel_name.clone(),
-            top_count: cli.top_count,
-            mode: cli.mode.clone(),
-            editor_choice_post_id: cli.editor_choice_post_id,
-            from_date: cli.from_date.unwrap_or(week_ago).timestamp(),
-            to_date: cli.to_date.unwrap_or(current_date).timestamp(),
+            command: Commands::Digest {},
+            channel_name: "ithueti".to_string(),
+            top_count: 3,
+            mode: "watermark".to_string(),
+            editor_choice_post_id: 0,
+            from_date: week_ago.timestamp(),
+            to_date: current_date.timestamp(),
             task_id: uuid::Uuid::new_v4().as_simple().to_string(),
         }
     }
