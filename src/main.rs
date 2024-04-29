@@ -22,7 +22,12 @@ use rocket::http::Status;
 use rocket::response::content;
 use rocket::response::content::RawHtml;
 use rocket::response::status;
+use rocket::tokio::sync::Mutex;
+use rustc_hash::FxHasher;
 use simple_logger::SimpleLogger;
+use std::collections::HashMap;
+use std::hash::Hasher;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -34,6 +39,8 @@ struct App {
     ctx: context::AppContext,
     html_renderer: HtmlRenderer,
     card_renderer: CardRenderer,
+    render_queue:
+        Mutex<HashMap<String, Option<std::result::Result<PathBuf, status::Custom<String>>>>>,
 }
 
 impl App {
@@ -55,8 +62,15 @@ impl App {
             ctx,
             html_renderer,
             card_renderer,
+            render_queue: Mutex::new(HashMap::new()),
         })
     }
+}
+
+fn hash(s: String) -> String {
+    let mut hasher = FxHasher::default();
+    hasher.write(s.as_bytes());
+    format!("{:0>20}", hasher.finish().to_string())
 }
 
 fn http_status(status: Status, msg: &str) -> status::Custom<String> {
@@ -428,12 +442,53 @@ async fn video(
         editor_choice_post_id: editor_choice.unwrap_or(task.editor_choice_post_id),
         from_date: from_date.unwrap_or(task.from_date),
         to_date: to_date.unwrap_or(task.to_date),
+        task_id: "0".to_string(),
         ..task
     };
+    let task = match task.to_string() {
+        Ok(task_string) => Task {
+            task_id: hash(task_string),
+            ..task
+        },
+        Err(_) => task,
+    };
+
     log::debug!("Working on task: {}", task.to_string().unwrap());
 
     if task.from_date < 0 || task.to_date < 0 {
         return http_status_err(Status::BadRequest, "Provided date is not allowed");
+    }
+
+    let mut queue = app.render_queue.lock().await;
+    let render_result = match queue.get(&task.task_id) {
+        Some(option) => match option {
+            Some(result) => result.clone(),
+            None => {
+                log::trace!("Task is in progress");
+                return http_status_err(Status::Accepted, "Task is in progress, try again later");
+            }
+        },
+        None => Ok(app.ctx.output_dir.join(format!("{}.mp4", task.task_id))),
+    };
+    // Can remove unconditionaly - it's already done or not started yet
+    queue.remove(&task.task_id);
+
+    let file = match render_result {
+        Ok(file) => file,
+        Err(e) => {
+            log::error!("Rendering task failed: {}", e.1);
+            return Err(e);
+        }
+    };
+
+    if file.exists() {
+        log::trace!("Used cache: {}", file.to_str().unwrap_or("unknown"));
+        match NamedFile::open(file).await {
+            Ok(file) => return Ok(file),
+            Err(e) => {
+                log::error!("Failed to open file: {}", e);
+            }
+        }
     }
 
     let tg_task = task.clone();
@@ -445,7 +500,7 @@ async fn video(
     let render_context = workers::cards::create_context(post_top, task.clone())
         .map_err(|e| http_status(Status::BadRequest, e.to_string().as_ref()))?;
 
-    image(channel, app).await?;
+    image(&task.channel_name, app).await?;
 
     let rendered_html = app
         .html_renderer
@@ -460,6 +515,35 @@ async fn video(
         rendered_html.len()
     );
 
+    queue.insert(task.task_id.clone(), None);
+    drop(queue);
+
+    let app_clone = Arc::clone(app.inner());
+    tokio::spawn(async move {
+        let result = match render_video(&task, &rendered_html, &app_clone).await {
+            Ok(file) => {
+                log::info!("Rendered video: {}", file.to_str().unwrap_or("unknown"));
+                Ok(file)
+            }
+            Err(e) => {
+                log::error!("Failed to render video: {}", e.1);
+                Err(e)
+            }
+        };
+        app_clone
+            .render_queue
+            .lock()
+            .await
+            .insert(task.task_id, Some(result));
+    });
+    http_status_err(Status::Accepted, "Try again later")
+}
+
+async fn render_video(
+    task: &Task,
+    rendered_html: &str,
+    app: &Arc<App>,
+) -> std::result::Result<PathBuf, status::Custom<String>> {
     let output_dir = app.ctx.output_dir.join(&task.task_id);
     tokio::fs::create_dir_all(&output_dir)
         .await
@@ -496,14 +580,17 @@ async fn video(
     log::debug!("Stdout: {}", String::from_utf8_lossy(&output.stdout));
     log::debug!("Stderr: {}", String::from_utf8_lossy(&output.stderr));
 
-    if !output.status.success() {
+    let file = output_dir.join("digest.mp4");
+    if !output.status.success() || !file.exists() {
         return http_status_err(Status::InternalServerError, "Failed to make a video");
     }
 
-    let file = output_dir.join("digest.mp4");
-    NamedFile::open(file)
+    let new_file = app.ctx.output_dir.join(format!("{}.mp4", task.task_id));
+    tokio::fs::rename(file, &new_file)
         .await
-        .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))
+        .map_err(|_| http_status(Status::InternalServerError, "Failed to move final file"))?;
+
+    Ok(new_file)
 }
 
 #[get("/post/<channel>/<id>")]
