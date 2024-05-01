@@ -1,7 +1,7 @@
 use crate::cli::*;
 use crate::util::Result;
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, Timelike, Utc};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Task {
@@ -31,7 +31,14 @@ pub struct Task {
 
 impl Task {
     pub fn default() -> Self {
-        let current_date = DateTime::<Utc>::from_timestamp(Local::now().timestamp(), 0).unwrap();
+        let current_date = DateTime::<Utc>::from_timestamp(Local::now().timestamp(), 0)
+            .unwrap()
+            .with_hour(0)
+            .unwrap()
+            .with_minute(0)
+            .unwrap()
+            .with_second(0)
+            .unwrap();
         let week_ago = current_date - chrono::Duration::days(7);
         Task {
             command: Commands::Digest {},
