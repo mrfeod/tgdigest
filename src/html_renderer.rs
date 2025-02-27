@@ -11,12 +11,12 @@ fn format_number(
     value: &tera::Value,
     _: &HashMap<String, tera::Value>,
 ) -> std::result::Result<tera::Value, tera::Error> {
-    let number = match value.as_i64() {
-        Some(n) => n.to_string(),
-        None => return Err(tera::Error::msg("Argument is not a number")),
+    let Some(number) = value.as_i64() else {
+        return Err(tera::Error::msg("Argument is not a number"));
     };
     let thin_space = "\u{2009}";
     let formatted = number
+        .to_string()
         .chars()
         .rev()
         .collect::<Vec<char>>()
@@ -55,11 +55,11 @@ impl HtmlRenderer {
     }
 
     pub fn render(&self, template_name: &str, context: &tera::Context) -> Result<String> {
-        match self.engine.render(template_name, context) {
-            Ok(rendered) => Ok(rendered),
-            Err(e) => Err(e.into()),
-        }
+        self.engine
+            .render(template_name, context)
+            .map_err(Into::into)
     }
+
     pub fn render_to_file(&self, template_name: &str, context: &tera::Context) -> Result<PathBuf> {
         let rendered = self.render(template_name, context)?;
 
@@ -70,10 +70,8 @@ impl HtmlRenderer {
 
         let output_path = self.output_dir.join(output_name);
 
-        let mut file = File::create(output_path.clone())?; // Use the cloned output_path
-        match file.write_all(rendered.as_bytes()) {
-            Ok(_) => Ok(output_path),
-            Err(e) => Err(e.into()),
-        }
+        let mut file = File::create(&output_path)?; // Use the cloned output_path
+        file.write_all(rendered.as_bytes())?;
+        Ok(output_path)
     }
 }
