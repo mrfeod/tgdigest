@@ -9,9 +9,9 @@ pub struct Block {
     pub cards: Option<Vec<Card>>,
 }
 
-impl Block {
-    pub fn default() -> Self {
-        Block {
+impl Default for Block {
+    fn default() -> Self {
+        Self {
             header: String::from("UNDEFINED"),
             icon: util::icon_url("⚠️"),
             filter: String::from(""),

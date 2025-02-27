@@ -11,9 +11,9 @@ pub struct Card {
     pub filter: String,
 }
 
-impl Card {
+impl Default for Card {
     fn default() -> Self {
-        Card {
+        Self {
             id: -1,
             count: None,
             header: String::from("UNDEFINED"),
@@ -21,27 +21,25 @@ impl Card {
             filter: String::from(""),
         }
     }
+}
 
+impl Card {
     pub fn create_card(post: Option<&Post>, action: ActionType) -> Card {
-        match post {
-            None => Card::default(),
-            Some(post) => Card {
-                id: post.id,
-                count: post.count(action),
-                ..Card::default()
-            },
-        }
+        post.map(|post| Card {
+            id: post.id,
+            count: post.count(action),
+            ..Card::default()
+        })
+        .unwrap_or_default()
     }
 
     pub fn create_cards(posts: &[Post], action: ActionType) -> Option<Vec<Card>> {
-        match posts
+        let cards = posts
             .iter()
             .map(|p| Card::create_card(Some(p), action))
             .filter(|c| c.count.is_some())
-            .collect::<Vec<Card>>()
-        {
-            cards if !cards.is_empty() => Some(cards),
-            _ => None,
-        }
+            .collect::<Vec<Card>>();
+
+        (!cards.is_empty()).then_some(cards)
     }
 }
