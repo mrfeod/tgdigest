@@ -1,10 +1,10 @@
+use crate::Commands::Cards;
 use crate::action::ActionType;
 use crate::post::Post;
 use crate::post::TopPost;
 use crate::task::Task;
 use crate::util::*;
 use crate::workers::card::Card;
-use crate::Commands::Cards;
 
 pub fn create_context(post_top: TopPost, task: Task) -> Result<RenderingContext> {
     let card_post_index = match task.command {
@@ -33,7 +33,9 @@ pub fn create_context(post_top: TopPost, task: Task) -> Result<RenderingContext>
         .into());
     }
 
-    let get_post = |action: ActionType| card_post_index[action as usize].map(|index| &post_top.index(action)[index - 1]);
+    let get_post = |action: ActionType| {
+        card_post_index[action as usize].map(|index| &post_top.index(action)[index - 1])
+    };
     let cards = vec![
         Card {
             header: String::from("Лучший по комментариям"),

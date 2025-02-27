@@ -13,11 +13,7 @@ pub enum PathExists {
 pub fn to_slash(path: &Path) -> Result<PathBuf> {
     match path.to_slash() {
         Some(slashed) => Ok(PathBuf::from(slashed.into_owned())),
-        _ => Err(format!(
-            "Can't handle the path '{}'",
-            path.display()
-        )
-        .into()),
+        _ => Err(format!("Can't handle the path '{}'", path.display()).into()),
     }
 }
 
@@ -42,20 +38,12 @@ pub fn handle_path(
     match force_exists.unwrap_or(PathExists::MustExist) {
         PathExists::MustExist => {
             if !path.exists() {
-                return Err(format!(
-                    "Path does not exist: {}",
-                    path.display()
-                )
-                .into());
+                return Err(format!("Path does not exist: {}", path.display()).into());
             }
         }
         PathExists::MustNotExist => {
             if path.exists() {
-                return Err(format!(
-                    "Path already exists: {}",
-                    path.display()
-                )
-                .into());
+                return Err(format!("Path already exists: {}", path.display()).into());
             }
         }
         _ => {}
