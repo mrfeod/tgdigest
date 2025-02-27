@@ -33,10 +33,7 @@ pub fn create_context(post_top: TopPost, task: Task) -> Result<RenderingContext>
         .into());
     }
 
-    let get_post = |action: ActionType| match card_post_index[action as usize] {
-        Some(index) => Some(&post_top.index(action)[index - 1]),
-        None => None,
-    };
+    let get_post = |action: ActionType| card_post_index[action as usize].map(|index| &post_top.index(action)[index - 1]);
     let cards = vec![
         Card {
             header: String::from("Лучший по комментариям"),

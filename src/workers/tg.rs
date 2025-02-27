@@ -22,21 +22,18 @@ pub async fn download_pic(
 ) -> Result<std::path::PathBuf> {
     let channel = get_channel(&client, task.channel_name.as_str()).await?;
     let photo = channel.photo_downloadable(true);
-    match photo {
-        Some(photo) => {
-            let photo_out: std::path::PathBuf =
-                ctx.output_dir.join(format!("{}.png", task.channel_name));
-            log::trace!(
-                "Path to pic for channel t.me/{} {}",
-                task.channel_name,
-                photo_out.to_str().unwrap()
-            );
-            match client.download_media(&photo, photo_out.clone()).await {
-                Ok(_) => return Ok(photo_out),
-                Err(e) => return Err(e.into()),
-            };
-        }
-        None => {}
+    if let Some(photo) = photo {
+        let photo_out: std::path::PathBuf =
+            ctx.output_dir.join(format!("{}.png", task.channel_name));
+        log::trace!(
+            "Path to pic for channel t.me/{} {}",
+            task.channel_name,
+            photo_out.to_str().unwrap()
+        );
+        match client.download_media(&photo, photo_out.clone()).await {
+            Ok(_) => return Ok(photo_out),
+            Err(e) => return Err(e.into()),
+        };
     }
     Err(format!("Can't find photo for t.me/{}", task.channel_name).into())
 }
@@ -57,7 +54,7 @@ pub async fn get_top_posts(client: grammers_client::Client, task: Task) -> Resul
         task.to_date
     );
 
-    return Ok(post_top);
+    Ok(post_top)
 }
 
 pub async fn get_post(
