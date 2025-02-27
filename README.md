@@ -1,50 +1,135 @@
 # tgdigest
 
-```text
-> ./tgdigest.exe --help
-Create digest for your telegram channel
-
-Usage: tgdigest.exe [OPTIONS] <CHANNEL_NAME> [COMMAND]
-
-Commands:
-  cards  Generate cards from chosen digest posts from 1 to <TOP_COUNT>
-  help   Print this message or the help of the given subcommand(s)
-
-Arguments:
-  <CHANNEL_NAME>  t.me/<CHANNEL_NAME>
-
-Options:
-  -i, --input-dir <INPUT_DIR>
-          Directory with tgdigest.session file and html templates, default is working directory
-  -o, --output-dir <OUTPUT_DIR>
-          Directory to write all the program artifacts, default is working directory
-  -d, --digest
-          Generate digest.html
-      --top-count <TOP_COUNT>
-          Count of posts in digest [default: 3]
-  -e, --editor-choice-post-id <EDITOR_CHOICE_POST_ID>
-          The id of the post to place it in "Editor choice" block [default: -1]
-  -f, --from-date <FROM_DATE>
-
-  -t, --to-date <TO_DATE>
-
-  -h, --help
-          Print help
-  -V, --version
-          Print version
-```
-
 # Build
-```
+```sh
 cargo build
-cargo build --release
 ```
 
-# Typical usage
-The next commands do:
- - Generates `digest.html` for dates range with 3 posts for each category and editor's choice from http://t.me/ithueti/5132
- - Renders `card_*.png` for first post in each category
+# Run
+You need to specify the configuration file as an argument.
+```sh
+cargo run -- -c config.json
 ```
-cd target/debug
-./tgdigest.exe ithueti --digest --input-dir="../../data" --top-count 3 --editor-choice-post-id 5132 --from-date '2023-07-14 00:00:00 UTC' --to-date '2023-10-02 00:00:00 UTC' cards 1 1 1 1
+
+`config.json`: file example:
+```json
+{
+    "input_dir": "~/code/tgdigest/data",
+    "output_dir": "./output",
+    "tg_session": "./tgdigest.session",
+    "tg_id": <tg_app_id>,
+    "tg_hash": "<tg_app_hash>"
+}
 ```
+
+# Server Endpoints
+
+- **GET /pic/\<channel\>**
+
+        - Description: Retrieves an image for the specified channel.
+        - Parameters:
+                - <channel>: The channel name.
+
+- **GET /video/\<mode\>/\<channel\>**
+
+        - Description: Retrieves a video for the specified mode and channel.
+        - Parameters:
+                - <mode>: The mode of the video.
+                - <channel>: The channel name.
+                - <replies> (optional): Include replies in the response.
+                - <reactions> (optional): Include reactions in the response.
+                - <forwards> (optional): Include forwards in the response.
+                - <views> (optional): Include views in the response.
+                - <top_count> (optional): The number of videos to retrieve.
+                - <editor_choice> (optional): Include editor's choice videos.
+                - <from_date> (optional): The starting date for the videos.
+                - <to_date> (optional): The ending date for the videos.
+
+- **GET /digest/\<mode\>/\<channel\>**
+
+        - Description: Retrieves a digest for the specified mode and channel.
+        - Parameters:
+                - <mode>: The mode of the digest.
+                - <channel>: The channel name.
+                - <top_count> (optional): The number of posts to include in the digest.
+                - <editor_choice> (optional): Include editor's choice posts.
+                - <from_date> (optional): The starting date for the digest.
+                - <to_date> (optional): The ending date for the digest.
+
+- **GET /video/\<mode\>/\<channel\>/\<year\>**
+
+        - Description: Retrieves a video for the specified mode, channel, and year.
+        - Parameters:
+                - <mode>: The mode of the video.
+                - <channel>: The channel name.
+                - <year>: The year.
+                - <replies> (optional): Include replies in the response.
+                - <reactions> (optional): Include reactions in the response.
+                - <forwards> (optional): Include forwards in the response.
+                - <views> (optional): Include views in the response.
+                - <top_count> (optional): The number of videos to retrieve.
+                - <editor_choice> (optional): Include editor's choice videos.
+
+- **GET /digest/\<mode\>/\<channel\>/\<year\>**
+
+        - Description: Retrieves a digest for the specified mode, channel, and year.
+        - Parameters:
+                - <mode>: The mode of the digest.
+                - <channel>: The channel name.
+                - <year>: The year.
+                - <top_count> (optional): The number of posts to include in the digest.
+                - <editor_choice> (optional): Include editor's choice posts.
+
+- **GET /video/\<mode\>/\<channel\>/\<year\>/\<month\>**
+
+        - Description: Retrieves a video for the specified mode, channel, year, and month.
+        - Parameters:
+                - <mode>: The mode of the video.
+                - <channel>: The channel name.
+                - <year>: The year.
+                - <month>: The month.
+                - <replies> (optional): Include replies in the response.
+                - <reactions> (optional): Include reactions in the response.
+                - <forwards> (optional): Include forwards in the response.
+                - <views> (optional): Include views in the response.
+                - <top_count> (optional): The number of videos to retrieve.
+                - <editor_choice> (optional): Include editor's choice videos.
+
+- **GET /digest/\<mode\>/\<channel\>/\<year\>/\<month\>**
+
+        - Description: Retrieves a digest for the specified mode, channel, year, and month.
+        - Parameters:
+                - <mode>: The mode of the digest.
+                - <channel>: The channel name.
+                - <year>: The year.
+                - <month>: The month.
+                - <top_count> (optional): The number of posts to include in the digest.
+                - <editor_choice> (optional): Include editor's choice posts.
+
+- **GET /video/\<mode\>/\<channel\>/\<year\>/\<month\>/\<week\>**
+
+        - Description: Retrieves a video for the specified mode, channel, year, month, and week.
+        - Parameters:
+                - <mode>: The mode of the video.
+                - <channel>: The channel name.
+                - <year>: The year.
+                - <month>: The month.
+                - <week>: The week.
+                - <replies> (optional): Include replies in the response.
+                - <reactions> (optional): Include reactions in the response.
+                - <forwards> (optional): Include forwards in the response.
+                - <views> (optional): Include views in the response.
+                - <top_count> (optional): The number of videos to retrieve.
+                - <editor_choice> (optional): Include editor's choice videos.
+
+- **GET /digest/\<mode\>/\<channel\>/\<year\>/\<month\>/\<week\>**
+
+        - Description: Retrieves a digest for the specified mode, channel, year, month, and week.
+        - Parameters:
+                - <mode>: The mode of the digest.
+                - <channel>: The channel name.
+                - <year>: The year.
+                - <month>: The month.
+                - <week>: The week.
+                - <top_count> (optional): The number of posts to include in the digest.
+                - <editor_choice> (optional): Include editor's choice posts.
