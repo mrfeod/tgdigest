@@ -69,18 +69,13 @@ pub struct TopPost {
 }
 
 impl TopPost {
-    fn get_top_by(top_count: usize, posts: &mut Vec<Post>, action: ActionType) -> Vec<Post> {
-        let mut top_count = top_count;
-        if posts.len() < top_count {
-            // panic!("Size of posts less than {}", top_count)
-            top_count = posts.len();
-        }
-
+    fn get_top_by(top_count: usize, posts: &mut [Post], action: ActionType) -> Vec<Post> {
+        let top_count = top_count.min(posts.len());
         posts.partial_sort(top_count, |a, b| b.count(action).cmp(&a.count(action)));
         posts[0..top_count].to_vec()
     }
 
-    pub fn get_top(top_count: usize, posts: &mut Vec<Post>) -> TopPost {
+    pub fn get_top(top_count: usize, posts: &mut [Post]) -> TopPost {
         TopPost {
             top_count,
             replies: Self::get_top_by(top_count, posts, ActionType::Replies),
@@ -90,7 +85,7 @@ impl TopPost {
         }
     }
 
-    pub fn index(&self, index: ActionType) -> &Vec<Post> {
+    pub fn index(&self, index: ActionType) -> &[Post] {
         match index {
             ActionType::Replies => &self.replies,
             ActionType::Reactions => &self.reactions,
