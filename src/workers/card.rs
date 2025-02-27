@@ -33,7 +33,7 @@ impl Card {
         }
     }
 
-    pub fn create_cards(posts: &Vec<Post>, action: ActionType) -> Option<Vec<Card>> {
+    pub fn create_cards(posts: &[Post], action: ActionType) -> Option<Vec<Card>> {
         match posts
             .iter()
             .map(|p| Card::create_card(Some(p), action))

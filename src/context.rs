@@ -13,12 +13,12 @@ pub struct AppContext {
 }
 
 impl AppContext {
-    pub fn new(config: &std::path::PathBuf) -> Result<AppContext> {
+    pub fn new(config: &std::path::Path) -> Result<AppContext> {
         let working_dir = std::env::current_dir()?;
 
         let data = fs::read_to_string(config).expect("Unable to read file");
         let ctx: AppContext =
-            serde_json::from_str(data.as_str()).expect("Unable to parse cfg.json");
+            serde_json::from_str(&data).expect("Unable to parse cfg.json");
         let ctx: AppContext = AppContext {
             input_dir: path_util::handle_path(Some(ctx.input_dir), &working_dir, None)?,
             output_dir: path_util::handle_path(Some(ctx.output_dir), &working_dir, None)?,
