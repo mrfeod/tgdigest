@@ -1,5 +1,12 @@
 # tgdigest
 
+# What's this?
+It's a tool to generate a video from telegram channel's posts.
+
+This is how the result looks like: https://ithueti.club/story
+
+As additional artifact the tool can create top/digest page: https://ithueti.club/digest2023
+
 # Build
 ```sh
 cargo build
