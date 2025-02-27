@@ -443,7 +443,6 @@ async fn video(
         from_date: from_date.unwrap_or(task.from_date),
         to_date: to_date.unwrap_or(task.to_date),
         task_id: "0".to_string(),
-        ..task
     };
     let task = match task.to_string() {
         Ok(task_string) => Task {
@@ -550,7 +549,7 @@ async fn render_video(
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
     app.card_renderer
-        .render_html(&output_dir, &rendered_html)
+        .render_html(&output_dir, rendered_html)
         .await
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 

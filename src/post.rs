@@ -35,7 +35,7 @@ impl Post {
             }
 
             posts.push(Post {
-                date: date,
+                date,
                 id: message.id(),
                 views: message.view_count(),
                 forwards: message.forward_count(),
@@ -126,7 +126,7 @@ impl TopPost {
                     }
                 }
             }
-            println!("");
+            println!();
         }
     }
 }
