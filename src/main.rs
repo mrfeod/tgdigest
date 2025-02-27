@@ -314,7 +314,9 @@ async fn digest(
     Ok(content::RawHtml(digest))
 }
 
-#[get("/video/<mode>/<channel>/<year>/<month>/<week>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>")]
+#[get(
+    "/video/<mode>/<channel>/<year>/<month>/<week>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>"
+)]
 async fn video_by_week(
     mode: &str,
     channel: &str,
@@ -348,7 +350,9 @@ async fn video_by_week(
     .await
 }
 
-#[get("/video/<mode>/<channel>/<year>/<month>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>")]
+#[get(
+    "/video/<mode>/<channel>/<year>/<month>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>"
+)]
 async fn video_by_month(
     mode: &str,
     channel: &str,
@@ -382,7 +386,9 @@ async fn video_by_month(
     .await
 }
 
-#[get("/video/<mode>/<channel>/<year>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>")]
+#[get(
+    "/video/<mode>/<channel>/<year>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>"
+)]
 async fn video_by_year(
     mode: &str,
     channel: &str,
@@ -414,7 +420,9 @@ async fn video_by_year(
     .await
 }
 
-#[get("/video/<mode>/<channel>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>&<from_date>&<to_date>")]
+#[get(
+    "/video/<mode>/<channel>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>&<from_date>&<to_date>"
+)]
 async fn video(
     mode: &str,
     channel: &str,
