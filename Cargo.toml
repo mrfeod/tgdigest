@@ -30,3 +30,4 @@ rustc-hash = { version = "1.1.0", default-features = false }
 
 serde = "1"
 serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }

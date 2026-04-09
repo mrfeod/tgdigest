@@ -1,4 +1,5 @@
 mod action;
+mod cache;
 mod card_renderer;
 mod cli;
 mod context;
@@ -10,9 +11,11 @@ mod tg;
 mod util;
 mod workers;
 
+use crate::cache::PostCache;
 use crate::card_renderer::CardRenderer;
 use crate::cli::*;
 use crate::html_renderer::HtmlRenderer;
+use crate::post::TopPost;
 use crate::task::*;
 use crate::util::*;
 
@@ -37,6 +40,7 @@ extern crate rocket;
 struct App {
     args: Args,
     ctx: context::AppContext,
+    cache: PostCache,
     html_renderer: HtmlRenderer,
     card_renderer: CardRenderer,
     render_queue:
@@ -54,12 +58,17 @@ impl App {
             }
         };
 
+        let db_path = ctx.tg_session.with_file_name("cache.db");
+        let cache = PostCache::new(&db_path)?;
+        log::info!("Opened cache DB at {}", db_path.display());
+
         let html_renderer: HtmlRenderer = HtmlRenderer::new(&ctx)?;
         let card_renderer: CardRenderer = CardRenderer::new().await?;
 
         Ok(App {
             args,
             ctx,
+            cache,
             html_renderer,
             card_renderer,
             render_queue: Mutex::new(HashMap::new()),
@@ -80,6 +89,20 @@ fn http_status(status: Status, msg: &str) -> status::Custom<String> {
 
 fn http_status_err<T>(status: Status, msg: &str) -> std::result::Result<T, status::Custom<String>> {
     Err(http_status(status, msg))
+}
+
+async fn get_top_posts_cached(app: &App, task: &Task, force: bool) -> std::result::Result<TopPost, Box<dyn std::error::Error>> {
+    if !force {
+        if let Some(mut cached) = app.cache.get_cached_posts(&task.channel_name, task.from_date, task.to_date)? {
+            return Ok(TopPost::get_top(task.top_count, &mut cached));
+        }
+    }
+
+    let client = tg::TelegramAPI::client();
+    let mut posts = workers::tg::fetch_posts(&client, task).await?;
+    let _ = app.cache.store_posts(&task.channel_name, task.from_date, task.to_date, &posts);
+
+    Ok(TopPost::get_top(task.top_count, &mut posts))
 }
 
 fn get_date_from_year(year: i32) -> std::result::Result<DateTime<Utc>, status::Custom<String>> {
@@ -148,7 +171,7 @@ async fn favicon(app: &rocket::State<Arc<App>>) -> Option<NamedFile> {
 async fn index(
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
-    return digest("ithueti", "ithueti", None, None, None, None, app).await;
+    return digest("ithueti", "ithueti", None, None, None, None, None, app).await;
 }
 
 #[get("/pic/<channel>")]
@@ -184,7 +207,7 @@ async fn image(
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))
 }
 
-#[get("/digest/<mode>/<channel>/<year>/<month>/<week>?<top_count>&<editor_choice>")]
+#[get("/digest/<mode>/<channel>/<year>/<month>/<week>?<top_count>&<editor_choice>&<force>")]
 async fn digest_by_week(
     mode: &str,
     channel: &str,
@@ -193,6 +216,7 @@ async fn digest_by_week(
     week: u32,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
+    force: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let from_date = get_date_from_week(year, month, week)?;
@@ -205,12 +229,13 @@ async fn digest_by_week(
         editor_choice,
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
+        force,
         app,
     )
     .await
 }
 
-#[get("/digest/<mode>/<channel>/<year>/<month>?<top_count>&<editor_choice>")]
+#[get("/digest/<mode>/<channel>/<year>/<month>?<top_count>&<editor_choice>&<force>")]
 async fn digest_by_month(
     mode: &str,
     channel: &str,
@@ -218,6 +243,7 @@ async fn digest_by_month(
     month: u32,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
+    force: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let from_date = get_date_from_month(year, month)?;
@@ -231,18 +257,20 @@ async fn digest_by_month(
         editor_choice,
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
+        force,
         app,
     )
     .await
 }
 
-#[get("/digest/<mode>/<channel>/<year>?<top_count>&<editor_choice>")]
+#[get("/digest/<mode>/<channel>/<year>?<top_count>&<editor_choice>&<force>")]
 async fn digest_by_year(
     mode: &str,
     channel: &str,
     year: i32,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
+    force: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let from_date = get_date_from_year(year)?;
@@ -255,12 +283,13 @@ async fn digest_by_year(
         editor_choice,
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
+        force,
         app,
     )
     .await
 }
 
-#[get("/digest/<mode>/<channel>?<top_count>&<editor_choice>&<from_date>&<to_date>")]
+#[get("/digest/<mode>/<channel>?<top_count>&<editor_choice>&<from_date>&<to_date>&<force>")]
 async fn digest(
     mode: &str,
     channel: &str,
@@ -268,6 +297,7 @@ async fn digest(
     editor_choice: Option<i32>,
     from_date: Option<i64>,
     to_date: Option<i64>,
+    force: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let task = Task::default();
@@ -287,13 +317,9 @@ async fn digest(
         return http_status_err(Status::BadRequest, "Provided date is not allowed");
     }
 
-    let tg_task = task.clone();
-    let client = tg::TelegramAPI::client();
-    let future = workers::tg::get_top_posts(client, tg_task);
-    let post_top = match future.await {
-        Ok(post_top) => post_top,
-        Err(e) => return http_status_err(Status::InternalServerError, e.to_string().as_ref()),
-    };
+    let post_top = get_top_posts_cached(&app, &task, force.unwrap_or(false))
+        .await
+        .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
     let digest_context = match workers::digest::create_context(post_top, task.clone()) {
         Ok(digest_context) => digest_context,
@@ -315,7 +341,7 @@ async fn digest(
 }
 
 #[get(
-    "/video/<mode>/<channel>/<year>/<month>/<week>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>"
+    "/video/<mode>/<channel>/<year>/<month>/<week>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>&<force>"
 )]
 async fn video_by_week(
     mode: &str,
@@ -329,6 +355,7 @@ async fn video_by_week(
     views: Option<usize>,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
+    force: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<NamedFile, status::Custom<String>> {
     let from_date = get_date_from_week(year, month, week)?;
@@ -345,13 +372,14 @@ async fn video_by_week(
         editor_choice,
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
+        force,
         app,
     )
     .await
 }
 
 #[get(
-    "/video/<mode>/<channel>/<year>/<month>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>"
+    "/video/<mode>/<channel>/<year>/<month>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>&<force>"
 )]
 async fn video_by_month(
     mode: &str,
@@ -364,6 +392,7 @@ async fn video_by_month(
     views: Option<usize>,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
+    force: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<NamedFile, status::Custom<String>> {
     let from_date = get_date_from_month(year, month)?;
@@ -381,13 +410,14 @@ async fn video_by_month(
         editor_choice,
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
+        force,
         app,
     )
     .await
 }
 
 #[get(
-    "/video/<mode>/<channel>/<year>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>"
+    "/video/<mode>/<channel>/<year>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>&<force>"
 )]
 async fn video_by_year(
     mode: &str,
@@ -399,6 +429,7 @@ async fn video_by_year(
     views: Option<usize>,
     top_count: Option<usize>,
     editor_choice: Option<i32>,
+    force: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<NamedFile, status::Custom<String>> {
     let from_date = get_date_from_year(year)?;
@@ -415,13 +446,14 @@ async fn video_by_year(
         editor_choice,
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
+        force,
         app,
     )
     .await
 }
 
 #[get(
-    "/video/<mode>/<channel>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>&<from_date>&<to_date>"
+    "/video/<mode>/<channel>?<replies>&<reactions>&<forwards>&<views>&<top_count>&<editor_choice>&<from_date>&<to_date>&<force>"
 )]
 async fn video(
     mode: &str,
@@ -434,6 +466,7 @@ async fn video(
     editor_choice: Option<i32>,
     from_date: Option<i64>,
     to_date: Option<i64>,
+    force: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<NamedFile, status::Custom<String>> {
     let task = Task::default();
@@ -499,8 +532,8 @@ async fn video(
     }
 
     let tg_task = task.clone();
-    let client = tg::TelegramAPI::client();
-    let post_top = workers::tg::get_top_posts(client, tg_task)
+    let force = force.unwrap_or(false);
+    let post_top = get_top_posts_cached(&app, &tg_task, force)
         .await
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 

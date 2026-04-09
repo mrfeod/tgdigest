@@ -36,22 +36,26 @@ pub async fn download_pic(
     Ok(photo_out)
 }
 
-pub async fn get_top_posts(client: grammers_client::Client, task: Task) -> Result<TopPost> {
-    let channel = get_channel(&client, task.channel_name.as_str()).await?;
+pub async fn fetch_posts(client: &grammers_client::Client, task: &Task) -> Result<Vec<Post>> {
+    let channel = get_channel(client, task.channel_name.as_str()).await?;
     let mut messages = client
         .iter_messages(channel)
         .max_date(task.to_date as i32)
         .limit(30000);
-    let mut posts = Post::get_by_date(&mut messages, task.from_date, task.to_date).await?;
-
-    let post_top = TopPost::get_top(task.top_count, &mut posts);
+    let posts = Post::get_by_date(&mut messages, task.from_date, task.to_date).await?;
     log::debug!(
-        "Fetched data for https://t.me/{} from {} to {}",
+        "Fetched {} posts for https://t.me/{} from {} to {}",
+        posts.len(),
         task.channel_name,
         task.from_date,
         task.to_date
     );
+    Ok(posts)
+}
 
+pub async fn get_top_posts(client: grammers_client::Client, task: Task) -> Result<TopPost> {
+    let mut posts = fetch_posts(&client, &task).await?;
+    let post_top = TopPost::get_top(task.top_count, &mut posts);
     Ok(post_top)
 }
 
