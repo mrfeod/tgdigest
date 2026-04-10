@@ -10,6 +10,7 @@ pub struct AppContext {
     pub tg_session: std::path::PathBuf,
     pub tg_id: i32,
     pub tg_hash: String,
+    pub proxy_url: Option<String>,
 }
 
 impl AppContext {

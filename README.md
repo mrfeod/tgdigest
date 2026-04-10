@@ -25,9 +25,16 @@ cargo run -- -c config.json
     "output_dir": "./output",
     "tg_session": "./tgdigest.session",
     "tg_id": <tg_app_id>,
-    "tg_hash": "<tg_app_hash>"
+    "tg_hash": "<tg_app_hash>",
+    "proxy_url": "socks5://host:port"
 }
 ```
+
+- `proxy_url` (optional): SOCKS5 proxy for Telegram connection. Supports `socks5://host:port` or `socks5://user:pass@host:port`. Omit the field to connect directly.
+
+# Caching
+
+Post data fetched from Telegram is cached in a local SQLite database (`cache.db`, stored next to `tg_session`). The cache TTL is 24 hours. To bypass the cache and force a fresh fetch from Telegram, add `force=true` query parameter to any `/digest` or `/video` endpoint.
 
 # Server Endpoints
 
@@ -51,6 +58,7 @@ cargo run -- -c config.json
                 - <editor_choice> (optional): Include editor's choice videos.
                 - <from_date> (optional): The starting date for the videos.
                 - <to_date> (optional): The ending date for the videos.
+                - <force> (optional): Bypass cache and fetch fresh data from Telegram.
 
 - **GET /digest/\<mode\>/\<channel\>**
 
@@ -62,6 +70,7 @@ cargo run -- -c config.json
                 - <editor_choice> (optional): Include editor's choice posts.
                 - <from_date> (optional): The starting date for the digest.
                 - <to_date> (optional): The ending date for the digest.
+                - <force> (optional): Bypass cache and fetch fresh data from Telegram.
 
 - **GET /video/\<mode\>/\<channel\>/\<year\>**
 
@@ -76,6 +85,7 @@ cargo run -- -c config.json
                 - <views> (optional): Include views in the response.
                 - <top_count> (optional): The number of videos to retrieve.
                 - <editor_choice> (optional): Include editor's choice videos.
+                - <force> (optional): Bypass cache and fetch fresh data from Telegram.
 
 - **GET /digest/\<mode\>/\<channel\>/\<year\>**
 
@@ -86,6 +96,7 @@ cargo run -- -c config.json
                 - <year>: The year.
                 - <top_count> (optional): The number of posts to include in the digest.
                 - <editor_choice> (optional): Include editor's choice posts.
+                - <force> (optional): Bypass cache and fetch fresh data from Telegram.
 
 - **GET /video/\<mode\>/\<channel\>/\<year\>/\<month\>**
 
@@ -101,6 +112,7 @@ cargo run -- -c config.json
                 - <views> (optional): Include views in the response.
                 - <top_count> (optional): The number of videos to retrieve.
                 - <editor_choice> (optional): Include editor's choice videos.
+                - <force> (optional): Bypass cache and fetch fresh data from Telegram.
 
 - **GET /digest/\<mode\>/\<channel\>/\<year\>/\<month\>**
 
@@ -112,6 +124,7 @@ cargo run -- -c config.json
                 - <month>: The month.
                 - <top_count> (optional): The number of posts to include in the digest.
                 - <editor_choice> (optional): Include editor's choice posts.
+                - <force> (optional): Bypass cache and fetch fresh data from Telegram.
 
 - **GET /video/\<mode\>/\<channel\>/\<year\>/\<month\>/\<week\>**
 
@@ -128,6 +141,7 @@ cargo run -- -c config.json
                 - <views> (optional): Include views in the response.
                 - <top_count> (optional): The number of videos to retrieve.
                 - <editor_choice> (optional): Include editor's choice videos.
+                - <force> (optional): Bypass cache and fetch fresh data from Telegram.
 
 - **GET /digest/\<mode\>/\<channel\>/\<year\>/\<month\>/\<week\>**
 
@@ -140,3 +154,4 @@ cargo run -- -c config.json
                 - <week>: The week.
                 - <top_count> (optional): The number of posts to include in the digest.
                 - <editor_choice> (optional): Include editor's choice posts.
+                - <force> (optional): Bypass cache and fetch fresh data from Telegram.

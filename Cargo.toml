@@ -12,7 +12,7 @@ clap = { version = "4.4.8", features = ["derive"] }
 # grammers-session = { path = "../grammers/lib/grammers-session" }
 # grammers-client = { git = "https://github.com/Lonami/grammers.git", branch = "master", features = ["unstable_raw"] }
 # grammers-session = { git = "https://github.com/Lonami/grammers.git" , branch = "master" }
-grammers-client = { git = "https://github.com/mrfeod/grammers.git", branch = "master", features = ["unstable_raw"] }
+grammers-client = { git = "https://github.com/mrfeod/grammers.git", branch = "master", features = ["unstable_raw", "proxy"] }
 grammers-session = { git = "https://github.com/mrfeod/grammers.git" , branch = "master" }
 tokio = { version =  "1.33.0", features = ["signal"] }
 simple_logger = "5.2.0"

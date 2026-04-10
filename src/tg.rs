@@ -43,7 +43,10 @@ impl TelegramAPI {
             session,
             api_id,
             api_hash,
-            params: Default::default(),
+            params: grammers_client::InitParams {
+                proxy_url: ctx.proxy_url.clone(),
+                ..Default::default()
+            },
         })
         .await
         .expect("Can't connect to Telegram");
