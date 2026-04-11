@@ -6,6 +6,7 @@ mod context;
 mod html_renderer;
 mod path_util;
 mod post;
+mod post_data;
 mod task;
 mod tg;
 mod util;
@@ -22,7 +23,9 @@ use crate::util::*;
 use chrono::{DateTime, Datelike, Days, Months, Utc};
 use rocket::fs::NamedFile;
 use rocket::http::Status;
-use rocket::response::content;
+use rocket::http::ContentType;
+use rocket::http::Header;
+use rocket::response::{content, Response};
 use rocket::response::content::RawHtml;
 use rocket::response::status;
 use rocket::tokio::sync::Mutex;
@@ -637,8 +640,8 @@ async fn render_video(
 async fn post_json(
     channel: &str,
     id: i32,
-    app: &rocket::State<Arc<App>>,
-) -> std::result::Result<rocket::serde::json::Json<post::Post>, status::Custom<String>> {
+    _app: &rocket::State<Arc<App>>,
+) -> std::result::Result<rocket::serde::json::Json<post_data::PostData>, status::Custom<String>> {
     let task = Task {
         command: Commands::Post {},
         channel_name: channel.to_string(),
@@ -650,7 +653,7 @@ async fn post_json(
     let tg_task = task.clone();
     let client = tg::TelegramAPI::client();
 
-    let post = workers::tg::get_post(client, tg_task, &app.ctx)
+    let post = workers::tg::get_post_data(client, tg_task)
         .await
         .map_err(|e| http_status(Status::NotFound, e.to_string().as_ref()))?;
 
@@ -664,6 +667,171 @@ async fn post_image(
 ) -> std::result::Result<NamedFile, status::Custom<String>> {
     let file = app.ctx.output_dir.join(format!("{}.jpg", id));
     log::debug!("Trying to open file: {}", file.to_str().unwrap());
+    NamedFile::open(file)
+        .await
+        .map_err(|e| http_status(Status::NotFound, e.to_string().as_ref()))
+}
+
+/// Parse "Range: bytes=START-END" header. Returns (start, optional_end).
+fn parse_range_header(range: &str) -> Option<(i64, Option<i64>)> {
+    let bytes_prefix = "bytes=";
+    if !range.starts_with(bytes_prefix) {
+        return None;
+    }
+    let range = &range[bytes_prefix.len()..];
+    let mut parts = range.splitn(2, '-');
+    let start: i64 = parts.next()?.parse().ok()?;
+    let end: Option<i64> = parts.next().and_then(|s| {
+        if s.is_empty() {
+            None
+        } else {
+            s.parse().ok()
+        }
+    });
+    Some((start, end))
+}
+
+/// Request guard to extract Range header.
+struct RangeHeader(Option<(i64, Option<i64>)>);
+
+#[rocket::async_trait]
+impl<'r> rocket::request::FromRequest<'r> for RangeHeader {
+    type Error = ();
+    async fn from_request(
+        req: &'r rocket::Request<'_>,
+    ) -> rocket::request::Outcome<Self, Self::Error> {
+        let range = req
+            .headers()
+            .get_one("Range")
+            .and_then(parse_range_header);
+        rocket::request::Outcome::Success(RangeHeader(range))
+    }
+}
+
+const CHUNK_SIZE: i32 = 512 * 1024; // Must match grammers MAX_CHUNK_SIZE
+
+/// Streaming media response that supports Range requests.
+struct MediaStream {
+    content_type: ContentType,
+    total_size: Option<i64>,
+    range_start: i64,
+    range_end: i64,
+    is_range: bool,
+    reader: rocket::tokio::io::DuplexStream,
+}
+
+impl<'r> rocket::response::Responder<'r, 'static> for MediaStream {
+    fn respond_to(self, _req: &'r rocket::Request<'_>) -> rocket::response::Result<'static> {
+        let mut builder = Response::build();
+        builder.header(self.content_type);
+        builder.header(Header::new("Accept-Ranges", "bytes"));
+
+        if let Some(total) = self.total_size {
+            if self.is_range {
+                builder.status(Status::PartialContent);
+                builder.header(Header::new(
+                    "Content-Range",
+                    format!("bytes {}-{}/{}", self.range_start, self.range_end, total),
+                ));
+                let content_length = self.range_end - self.range_start + 1;
+                builder.header(Header::new("Content-Length", content_length.to_string()));
+            } else {
+                builder.header(Header::new("Content-Length", total.to_string()));
+            }
+        }
+
+        builder.streamed_body(self.reader);
+        builder.ok()
+    }
+}
+
+#[get("/media/<channel>/<id>")]
+async fn media_proxy(
+    channel: &str,
+    id: i32,
+    _app: &rocket::State<Arc<App>>,
+    range: RangeHeader,
+) -> std::result::Result<MediaStream, status::Custom<String>> {
+    let client = tg::TelegramAPI::client();
+    let (downloadable, mime, total_size) = workers::tg::resolve_media(&client, channel, id)
+        .await
+        .map_err(|e| http_status(Status::NotFound, &e.to_string()))?;
+
+    let content_type = ContentType::parse_flexible(&mime).unwrap_or(ContentType::Binary);
+
+    // Parse Range
+    let (range_start, range_end, is_range) = match (range.0, total_size) {
+        (Some((start, end)), Some(total)) => {
+            let end = end.unwrap_or(total - 1).min(total - 1);
+            (start, end, true)
+        }
+        _ => (0, total_size.unwrap_or(0) - 1, false),
+    };
+
+    let skip_bytes = if is_range { range_start } else { 0 };
+    let skip_chunks_count = (skip_bytes / CHUNK_SIZE as i64) as i32;
+    let skip_remainder = (skip_bytes % CHUNK_SIZE as i64) as usize;
+
+    let bytes_to_send = if is_range {
+        range_end - range_start + 1
+    } else {
+        total_size.unwrap_or(i64::MAX)
+    };
+
+    let mut download_iter = client.iter_download(&downloadable);
+    if skip_chunks_count > 0 {
+        download_iter = download_iter.skip_chunks(skip_chunks_count);
+    }
+
+    // Bridge DownloadIter chunks into an AsyncRead via DuplexStream
+    let (duplex_write, duplex_read) = rocket::tokio::io::duplex(CHUNK_SIZE as usize * 2);
+
+    rocket::tokio::spawn(async move {
+        use rocket::tokio::io::AsyncWriteExt;
+        let mut writer = duplex_write;
+        let mut remaining = bytes_to_send;
+        let mut first = true;
+
+        while remaining > 0 {
+            match download_iter.next().await {
+                Ok(Some(chunk)) => {
+                    let mut data = &chunk[..];
+                    if first && skip_remainder > 0 {
+                        data = &data[skip_remainder..];
+                    }
+                    first = false;
+                    let to_write = data.len().min(remaining as usize);
+                    if writer.write_all(&data[..to_write]).await.is_err() {
+                        break;
+                    }
+                    remaining -= to_write as i64;
+                }
+                _ => break,
+            }
+        }
+    });
+
+    Ok(MediaStream {
+        content_type,
+        total_size,
+        range_start,
+        range_end,
+        is_range,
+        reader: duplex_read,
+    })
+}
+
+#[get("/localmedia/<filename>")]
+async fn localmedia_file(
+    filename: &str,
+    app: &rocket::State<Arc<App>>,
+) -> std::result::Result<NamedFile, status::Custom<String>> {
+    // Sanitize: only allow alphanumeric, dots, dashes, underscores
+    if filename.contains('/') || filename.contains('\\') || filename.starts_with('.') {
+        return http_status_err(Status::BadRequest, "Invalid filename");
+    }
+    let file = app.ctx.output_dir.join(filename);
+    log::debug!("Serving local media file: {}", file.display());
     NamedFile::open(file)
         .await
         .map_err(|e| http_status(Status::NotFound, e.to_string().as_ref()))
@@ -732,7 +900,9 @@ async fn main() {
                 video_by_year,
                 video,
                 post_json,
-                post_image
+                post_image,
+                media_proxy,
+                localmedia_file
             ],
         )
         .manage(app.clone())
