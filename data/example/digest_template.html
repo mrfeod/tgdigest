@@ -22,15 +22,28 @@
         <h3>{{ loop.index }}. <img src="{{ block.icon }}" height="16" />
             {{ card.count | format_number }}</h3>
         <div>
-            <iframe src="/view/{{ channel_name }}/{{ card.id }}" style="width:100%;border:none;height:600px;" loading="lazy"></iframe>
+            <iframe src="/view/{{ channel_name }}/{{ card.id }}" style="width:100%;border:none;max-height:900px;" loading="lazy"></iframe>
         </div>
         {% endfor %}
         {% endfor %}
         {% if editor_choice_id > 0 %}
         <h2>Editor's choice</h2>
-        <iframe src="/view/{{ channel_name }}/{{ editor_choice_id }}" style="width:100%;border:none;height:600px;" loading="lazy"></iframe>
+        <iframe src="/view/{{ channel_name }}/{{ editor_choice_id }}" style="width:100%;border:none;max-height:900px;" loading="lazy"></iframe>
         {% endif %}
     </div>
+    <script>
+        window.addEventListener('message', function(e) {
+            if (e.data && e.data.type === 'viewResize') {
+                var iframes = document.querySelectorAll('iframe');
+                for (var i = 0; i < iframes.length; i++) {
+                    if (iframes[i].contentWindow === e.source) {
+                        iframes[i].style.height = e.data.height + 'px';
+                        break;
+                    }
+                }
+            }
+        });
+    </script>
 </body>
 
 </html>
