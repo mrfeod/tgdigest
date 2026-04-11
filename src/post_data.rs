@@ -9,6 +9,8 @@ pub struct PostData {
     pub date: i64,
     pub edit_date: Option<i64>,
     pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_title: Option<String>,
 
     // Text
     pub text: String,
@@ -167,6 +169,8 @@ pub struct ForwardData {
     pub channel_post: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub post_author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_username: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -239,6 +243,7 @@ pub fn extract_forward(fwd: &enums::MessageFwdHeader) -> ForwardData {
         date: h.date as i64,
         channel_post: h.channel_post,
         post_author: h.post_author.clone(),
+        from_username: None,
     }
 }
 
@@ -475,6 +480,7 @@ pub fn from_message(msg: &grammers_client::types::Message, channel_name: &str) -
         reply_to_msg_id,
         grouped_id: raw.grouped_id,
         pinned: raw.pinned,
+        channel_title: None,
         album: Vec::new(),
     }
 }

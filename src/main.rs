@@ -660,6 +660,176 @@ async fn post_json(
     Ok(rocket::serde::json::Json(post))
 }
 
+#[get("/view/<channel>/<id>?<views>&<forwards>&<reactions>&<comments>&<px_limit>&<dark>")]
+async fn view_post(
+    channel: &str,
+    id: i32,
+    views: Option<bool>,
+    forwards: Option<bool>,
+    reactions: Option<bool>,
+    comments: Option<bool>,
+    px_limit: Option<u32>,
+    dark: Option<bool>,
+    app: &rocket::State<Arc<App>>,
+) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
+    let task = Task {
+        command: Commands::Post {},
+        channel_name: channel.to_string(),
+        editor_choice_post_id: id,
+        ..Task::default()
+    };
+
+    let client = tg::TelegramAPI::client();
+    let post = workers::tg::get_post_data(client, task)
+        .await
+        .map_err(|e| http_status(Status::NotFound, e.to_string().as_ref()))?;
+
+    // Render entities into HTML text
+    let rendered_text = render_entities(&post.text, &post.entities);
+
+    let mut ctx = tera::Context::new();
+    ctx.insert("rendered_text", &rendered_text);
+    ctx.insert("photo", &post.photo);
+    ctx.insert("video", &post.video);
+    ctx.insert("document", &post.document);
+    ctx.insert("contact", &post.contact);
+    ctx.insert("web_page", &post.web_page);
+    ctx.insert("forward_from", &post.forward_from);
+    ctx.insert("album", &post.album);
+    // Determine if media leads the post (before text)
+    let has_leading_media = post.photo.is_some() || post.video.is_some() || !post.album.is_empty();
+    ctx.insert("has_leading_media", &has_leading_media);
+    ctx.insert("channel_name", channel);
+    ctx.insert("channel_title", &post.channel_title);
+    ctx.insert("userpic_url", &format!("/userpic/{}", channel));
+    ctx.insert("post_id", &post.id);
+    ctx.insert("post_date", &DateTime::<Utc>::from_timestamp(post.date, 0)
+        .map(|dt| dt.format("%d/%m/%Y %H:%M").to_string())
+        .unwrap_or_default());
+    ctx.insert("dark", &dark.unwrap_or(false));
+
+    let show_views = views.unwrap_or(true);
+    let show_forwards = forwards.unwrap_or(true);
+    let show_reactions = reactions.unwrap_or(true);
+    let show_comments = comments.unwrap_or(true);
+    let show_stats = show_views || show_forwards || show_reactions || show_comments;
+
+    ctx.insert("show_stats", &show_stats);
+    ctx.insert("show_views", &show_views);
+    ctx.insert("show_forwards", &show_forwards);
+    ctx.insert("show_reactions", &show_reactions);
+    ctx.insert("show_comments", &show_comments);
+    ctx.insert("views", &post.views);
+    ctx.insert("forwards", &post.forwards);
+    ctx.insert("reactions", &post.reactions);
+    ctx.insert("comments", &post.replies);
+    ctx.insert("px_limit", &px_limit);
+
+    let html = app
+        .html_renderer
+        .render("view_template.html", &ctx)
+        .map_err(|e| http_status(Status::InternalServerError, &e.to_string()))?;
+
+    Ok(RawHtml(html))
+}
+
+/// Convert post text + TL entities into HTML.
+fn render_entities(text: &str, entities: &[post_data::Entity]) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len() as i32;
+
+    // Build a list of (offset, is_open, tag) events
+    let mut events: Vec<(i32, bool, String)> = Vec::new();
+    for e in entities {
+        let open_tag = match e.entity_type.as_str() {
+            "bold" => "<b>".to_string(),
+            "italic" => "<i>".to_string(),
+            "underline" => "<u>".to_string(),
+            "strike" => "<s>".to_string(),
+            "code" => "<code>".to_string(),
+            "pre" => {
+                if let Some(lang) = &e.language {
+                    format!("<pre><code class=\"language-{}\">", html_escape(lang))
+                } else {
+                    "<pre><code>".to_string()
+                }
+            }
+            "text_url" => {
+                if let Some(url) = &e.url {
+                    format!("<a href=\"{}\" target=\"_blank\" rel=\"noopener\">", html_escape(url))
+                } else {
+                    "<span>".to_string()
+                }
+            }
+            "url" => {
+                let url_text: String = chars[e.offset as usize..(e.offset + e.length).min(len) as usize].iter().collect();
+                format!("<a href=\"{}\" target=\"_blank\" rel=\"noopener\">", html_escape(&url_text))
+            }
+            "mention" => {
+                let mention: String = chars[e.offset as usize..(e.offset + e.length).min(len) as usize].iter().collect();
+                let username = mention.trim_start_matches('@');
+                format!("<a href=\"https://t.me/{}\" target=\"_blank\" rel=\"noopener\">", html_escape(username))
+            }
+            "spoiler" => "<span class=\"spoiler\">".to_string(),
+            "blockquote" => "<blockquote>".to_string(),
+            "hashtag" | "cashtag" | "phone" | "email" | "bank_card" => "<span>".to_string(),
+            _ => continue,
+        };
+        let close_tag = match e.entity_type.as_str() {
+            "bold" => "</b>",
+            "italic" => "</i>",
+            "underline" => "</u>",
+            "strike" => "</s>",
+            "code" => "</code>",
+            "pre" => "</code></pre>",
+            "text_url" | "url" | "mention" => "</a>",
+            "spoiler" | "hashtag" | "cashtag" | "phone" | "email" | "bank_card" => "</span>",
+            "blockquote" => "</blockquote>",
+            _ => continue,
+        };
+        events.push((e.offset, true, open_tag));
+        events.push((e.offset + e.length, false, close_tag.to_string()));
+    }
+    // Sort: by offset, closes before opens at same position
+    events.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+    let mut result = String::with_capacity(text.len() * 2);
+    let mut pos = 0i32;
+    for (offset, _is_open, tag) in &events {
+        // Emit plain text up to this offset
+        while pos < *offset && pos < len {
+            let ch = chars[pos as usize];
+            match ch {
+                '&' => result.push_str("&amp;"),
+                '<' => result.push_str("&lt;"),
+                '>' => result.push_str("&gt;"),
+                _ => result.push(ch),
+            }
+            pos += 1;
+        }
+        result.push_str(tag);
+    }
+    // Remaining text
+    while pos < len {
+        let ch = chars[pos as usize];
+        match ch {
+            '&' => result.push_str("&amp;"),
+            '<' => result.push_str("&lt;"),
+            '>' => result.push_str("&gt;"),
+            _ => result.push(ch),
+        }
+        pos += 1;
+    }
+    result
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 #[get("/img/<id>")]
 async fn post_image(
     id: i64,
@@ -821,6 +991,46 @@ async fn media_proxy(
     })
 }
 
+#[get("/userpic/<channel>")]
+async fn userpic_proxy(
+    channel: &str,
+    _app: &rocket::State<Arc<App>>,
+) -> std::result::Result<MediaStream, status::Custom<String>> {
+    let client = tg::TelegramAPI::client();
+    let chat = client
+        .resolve_username(channel)
+        .await
+        .map_err(|e| http_status(Status::InternalServerError, &e.to_string()))?
+        .ok_or_else(|| http_status(Status::NotFound, &format!("Channel {} not found", channel)))?;
+
+    let photo = chat
+        .photo_downloadable(true)
+        .ok_or_else(|| http_status(Status::NotFound, "Channel has no photo"))?;
+
+    let mut download_iter = client.iter_download(&photo);
+
+    let (duplex_write, duplex_read) = rocket::tokio::io::duplex(CHUNK_SIZE as usize * 2);
+
+    rocket::tokio::spawn(async move {
+        use rocket::tokio::io::AsyncWriteExt;
+        let mut writer = duplex_write;
+        while let Ok(Some(chunk)) = download_iter.next().await {
+            if writer.write_all(&chunk).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    Ok(MediaStream {
+        content_type: ContentType::JPEG,
+        total_size: None,
+        range_start: 0,
+        range_end: 0,
+        is_range: false,
+        reader: duplex_read,
+    })
+}
+
 #[get("/localmedia/<filename>")]
 async fn localmedia_file(
     filename: &str,
@@ -900,8 +1110,10 @@ async fn main() {
                 video_by_year,
                 video,
                 post_json,
+                view_post,
                 post_image,
                 media_proxy,
+                userpic_proxy,
                 localmedia_file
             ],
         )

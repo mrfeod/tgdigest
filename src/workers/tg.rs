@@ -126,6 +126,27 @@ pub async fn get_post_data(
     };
 
     let mut post = post_data::from_message(&message, &task.channel_name);
+    post.channel_title = Some(channel.name().to_string());
+
+    // Resolve forward source username from cached entities
+    if let Some(ref mut fwd) = post.forward_from {
+        if let Some(ref from_id) = fwd.from_id {
+            let peer = match from_id.peer_type.as_str() {
+                "channel" => Some(grammers_tl_types::enums::Peer::Channel(
+                    grammers_tl_types::types::PeerChannel { channel_id: from_id.id },
+                )),
+                "user" => Some(grammers_tl_types::enums::Peer::User(
+                    grammers_tl_types::types::PeerUser { user_id: from_id.id },
+                )),
+                _ => None,
+            };
+            if let Some(peer) = peer {
+                if let Some(chat) = message.chats.get(&peer) {
+                    fwd.from_username = chat.username().map(|s| s.to_string());
+                }
+            }
+        }
+    }
 
     // If this message is part of a media group, fetch all album members
     if let Some(grouped_id) = message.grouped_id() {
