@@ -198,14 +198,27 @@ pub async fn resolve_media(
     }
 
     if let Some(media) = message.media() {
-        if let Media::Document(doc) = media {
-            let media_id = doc.id();
-            let mime = doc
-                .mime_type()
-                .unwrap_or("application/octet-stream")
-                .to_string();
-            let size = doc.size();
-            return Ok((Downloadable::Media(Media::Document(doc)), mime, Some(size), media_id));
+        match media {
+            Media::Document(doc) => {
+                let media_id = doc.id();
+                let mime = doc
+                    .mime_type()
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                let size = doc.size();
+                return Ok((Downloadable::Media(Media::Document(doc)), mime, Some(size), media_id));
+            }
+            Media::Sticker(sticker) => {
+                let doc = sticker.document;
+                let media_id = doc.id();
+                let mime = doc
+                    .mime_type()
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                let size = doc.size();
+                return Ok((Downloadable::Media(Media::Document(doc)), mime, Some(size), media_id));
+            }
+            _ => {}
         }
     }
 
