@@ -3,38 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-a { color: #00F; }
-.header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.header .name { font-weight: 600; font-size: 15px; }
-.header .date { color: #888; font-size: 13px; margin-left: auto; }
-.media img, .media video { max-width: 100%; max-height: 500px; display: block; border-radius: 8px; }
-.text { font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
-</style>
 </head>
 <body>
-{% if channel_title %}
-<div class="header">
-  <span class="name">{{ channel_title }}</span>
-  <span class="date">{{ post_date }}</span>
-  </div>
-  {% endif %}
-
-  {% if photo %}
-  <div class="media"><img src="{{ photo.url }}" alt=""></div>
-  {% elif video %}
-  <div class="media"><video src="{{ video.url }}" controls preload="metadata"></video></div>
-  {% endif %}
-
-{% if rendered_text %}
-<div class="text">{{ rendered_text | safe }}</div>
-{% endif %}
+<script async src="https://telegram.org/js/telegram-widget.js?22" data-telegram-post="{{ channel_name }}/{{ post_id }}"
+  data-width="100%" data-userpic="false" data-color="343638" data-dark-color="FFFFFF"></script>
 <script>
-// Notify parent iframe of our height for auto-resize
 if (window.parent !== window) {
   function postHeight() {
-    window.parent.postMessage({ type: 'viewResize', height: document.body.scrollHeight }, '*');
+    window.parent.postMessage({ type: 'viewResize', height: document.body.scrollHeight + 2 }, '*');
   }
   postHeight();
   new ResizeObserver(postHeight).observe(document.body);
