@@ -39,7 +39,12 @@ pub async fn download_pic(
 
 pub const DEFAULT_FETCH_LIMIT: usize = 1000;
 
-pub async fn fetch_posts(client: &grammers_client::Client, task: &Task, limit: usize) -> Result<Vec<Post>> {
+pub async fn fetch_posts(
+    client: &grammers_client::Client,
+    task: &Task,
+    limit: usize,
+    progress: Option<&std::sync::atomic::AtomicUsize>,
+) -> Result<Vec<Post>> {
     let channel = get_channel(client, task.channel_name.as_str()).await?;
     let mut messages = client
         .iter_messages(channel)
@@ -64,6 +69,9 @@ pub async fn fetch_posts(client: &grammers_client::Client, task: &Task, limit: u
             message: Some(message.msg.message),
             image: None,
         });
+        if let Some(p) = progress {
+            p.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
     log::debug!(
         "Fetched {} posts for https://t.me/{} from {} to {}",
@@ -81,7 +89,7 @@ pub async fn get_channel_title(client: &grammers_client::Client, channel_name: &
 }
 
 pub async fn get_top_posts(client: grammers_client::Client, task: Task) -> Result<TopPost> {
-    let mut posts = fetch_posts(&client, &task, DEFAULT_FETCH_LIMIT).await?;
+    let mut posts = fetch_posts(&client, &task, DEFAULT_FETCH_LIMIT, None).await?;
     let post_top = TopPost::get_top(task.top_count, &mut posts);
     Ok(post_top)
 }
