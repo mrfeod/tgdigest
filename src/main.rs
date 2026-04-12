@@ -349,7 +349,12 @@ async fn digest(
         .await
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
-    let digest_context = match workers::digest::create_context(post_top, task.clone()) {
+    let client = tg::TelegramAPI::client();
+    let channel_title = workers::tg::get_channel_title(&client, &task.channel_name)
+        .await
+        .unwrap_or_else(|_| task.channel_name.clone());
+
+    let digest_context = match workers::digest::create_context(post_top, task.clone(), &channel_title) {
         Ok(digest_context) => digest_context,
         Err(e) => {
             return http_status_err(Status::InternalServerError, e.to_string().as_ref());

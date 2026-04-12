@@ -5,7 +5,7 @@ use crate::util::*;
 use crate::workers::block::Block;
 use crate::workers::card::Card;
 
-pub fn create_context(post_top: TopPost, task: Task) -> Result<RenderingContext> {
+pub fn create_context(post_top: TopPost, task: Task, channel_title: &str) -> Result<RenderingContext> {
     log::debug!("Creating digest.html");
     let get_posts = |action: ActionType| post_top.index(action);
     let blocks = vec![
@@ -42,6 +42,8 @@ pub fn create_context(post_top: TopPost, task: Task) -> Result<RenderingContext>
     context.insert("blocks", &blocks);
     context.insert("editor_choice_id", &task.editor_choice_post_id);
     context.insert("channel_name", &task.channel_name.as_str());
+    context.insert("channel_title", channel_title);
+    context.insert("userpic_url", &format!("/userpic/{}", &task.channel_name));
 
     Ok(context)
 }

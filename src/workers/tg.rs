@@ -54,6 +54,11 @@ pub async fn fetch_posts(client: &grammers_client::Client, task: &Task) -> Resul
     Ok(posts)
 }
 
+pub async fn get_channel_title(client: &grammers_client::Client, channel_name: &str) -> Result<String> {
+    let channel = get_channel(client, channel_name).await?;
+    Ok(channel.name().to_string())
+}
+
 pub async fn get_top_posts(client: grammers_client::Client, task: Task) -> Result<TopPost> {
     let mut posts = fetch_posts(&client, &task).await?;
     let post_top = TopPost::get_top(task.top_count, &mut posts);
