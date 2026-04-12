@@ -11,6 +11,12 @@ pub struct AppContext {
     pub tg_id: i32,
     pub tg_hash: String,
     pub proxy_url: Option<String>,
+    #[serde(default = "default_cache_limit_mb")]
+    pub cache_limit_mb: u64,
+}
+
+fn default_cache_limit_mb() -> u64 {
+    1024
 }
 
 impl AppContext {

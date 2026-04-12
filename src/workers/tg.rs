@@ -172,13 +172,13 @@ pub async fn get_post_data(
 }
 
 /// Resolve media metadata for a post without downloading anything.
-/// Returns (Downloadable, mime_type, file_size) for use with iter_download.
+/// Returns (Downloadable, mime_type, file_size, media_id) for use with iter_download.
 /// file_size is None for photos (unknown without downloading).
 pub async fn resolve_media(
     client: &grammers_client::Client,
     channel_name: &str,
     msg_id: i32,
-) -> Result<(Downloadable, String, Option<i64>)> {
+) -> Result<(Downloadable, String, Option<i64>, i64)> {
     let channel = get_channel(client, channel_name).await?;
     let message = client
         .get_messages_by_id(channel, &[msg_id])
@@ -188,21 +188,24 @@ pub async fn resolve_media(
         .ok_or_else(|| format!("Message {}/{} not found", channel_name, msg_id))?;
 
     if let Some(photo) = message.photo() {
+        let media_id = photo.id();
         return Ok((
             Downloadable::Media(Media::Photo(photo)),
             "image/jpeg".to_string(),
             None,
+            media_id,
         ));
     }
 
     if let Some(media) = message.media() {
         if let Media::Document(doc) = media {
+            let media_id = doc.id();
             let mime = doc
                 .mime_type()
                 .unwrap_or("application/octet-stream")
                 .to_string();
             let size = doc.size();
-            return Ok((Downloadable::Media(Media::Document(doc)), mime, Some(size)));
+            return Ok((Downloadable::Media(Media::Document(doc)), mime, Some(size), media_id));
         }
     }
 

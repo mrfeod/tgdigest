@@ -62,8 +62,8 @@ impl App {
         };
 
         let db_path = ctx.tg_session.with_file_name("cache.db");
-        let cache = PostCache::new(&db_path)?;
-        log::info!("Opened cache DB at {}", db_path.display());
+        let cache = PostCache::new(&db_path, &ctx.output_dir, ctx.cache_limit_mb)?;
+        log::info!("Opened cache DB at {}, media cache in {}", db_path.display(), ctx.output_dir.display());
 
         let html_renderer: HtmlRenderer = HtmlRenderer::new(&ctx)?;
         let card_renderer: CardRenderer = CardRenderer::new().await?;
@@ -95,17 +95,42 @@ fn http_status_err<T>(status: Status, msg: &str) -> std::result::Result<T, statu
 }
 
 async fn get_top_posts_cached(app: &App, task: &Task, force: bool) -> std::result::Result<TopPost, Box<dyn std::error::Error>> {
-    if !force {
-        if let Some(mut cached) = app.cache.get_cached_posts(&task.channel_name, task.from_date, task.to_date)? {
-            return Ok(TopPost::get_top(task.top_count, &mut cached));
-        }
+    if force {
+        // Force: fetch everything from Telegram
+        let client = tg::TelegramAPI::client();
+        let mut posts = workers::tg::fetch_posts(&client, task).await?;
+        let _ = app.cache.store_posts(&task.channel_name, &posts);
+        return Ok(TopPost::get_top(task.top_count, &mut posts));
     }
 
-    let client = tg::TelegramAPI::client();
-    let mut posts = workers::tg::fetch_posts(&client, task).await?;
-    let _ = app.cache.store_posts(&task.channel_name, task.from_date, task.to_date, &posts);
+    let (mut fresh_posts, stale_ranges) = app.cache.get_posts_and_stale_ranges(
+        &task.channel_name, task.from_date, task.to_date,
+    )?;
 
-    Ok(TopPost::get_top(task.top_count, &mut posts))
+    if stale_ranges.is_empty() {
+        // Everything is fresh
+        return Ok(TopPost::get_top(task.top_count, &mut fresh_posts));
+    }
+
+    // Fetch only the stale sub-ranges from Telegram
+    let client = tg::TelegramAPI::client();
+    for (from, to) in &stale_ranges {
+        log::debug!("Fetching stale range [{} .. {}] for {}", from, to, task.channel_name);
+        let sub_task = Task {
+            from_date: *from,
+            to_date: *to,
+            ..task.clone()
+        };
+        let fetched = workers::tg::fetch_posts(&client, &sub_task).await?;
+        let _ = app.cache.store_posts(&task.channel_name, &fetched);
+        fresh_posts.extend(fetched);
+    }
+
+    // Deduplicate by post id (cached + freshly fetched may overlap)
+    fresh_posts.sort_by_key(|p| p.id);
+    fresh_posts.dedup_by_key(|p| p.id);
+
+    Ok(TopPost::get_top(task.top_count, &mut fresh_posts))
 }
 
 fn get_date_from_year(year: i32) -> std::result::Result<DateTime<Utc>, status::Custom<String>> {
@@ -921,24 +946,69 @@ impl<'r> rocket::response::Responder<'r, 'static> for MediaStream {
 async fn media_proxy(
     channel: &str,
     id: i32,
-    _app: &rocket::State<Arc<App>>,
+    app: &rocket::State<Arc<App>>,
     range: RangeHeader,
 ) -> std::result::Result<MediaStream, status::Custom<String>> {
+    // Check disk cache first
+    let cached = app.cache.get_cached_media(channel, id).ok().flatten();
+    if let Some((path, mime, file_size)) = cached {
+        log::debug!("Serving cached media: {}/{}", channel, id);
+        return serve_file_media(path, &mime, file_size, range).await;
+    }
+
+    // Cache miss — fetch from Telegram
     let client = tg::TelegramAPI::client();
-    let (downloadable, mime, total_size) = workers::tg::resolve_media(&client, channel, id)
+    let (downloadable, mime, total_size, media_id) = workers::tg::resolve_media(&client, channel, id)
         .await
         .map_err(|e| http_status(Status::NotFound, &e.to_string()))?;
 
-    let content_type = ContentType::parse_flexible(&mime).unwrap_or(ContentType::Binary);
-
-    // Parse Range
-    let (range_start, range_end, is_range) = match (range.0, total_size) {
-        (Some((start, end)), Some(total)) => {
-            let end = end.unwrap_or(total - 1).min(total - 1);
-            (start, end, true)
+    // If the file is small enough to cache, download fully, cache, then serve from disk
+    let should_cache = total_size.map_or(true, |s| s <= 10 * 1024 * 1024); // cache photos (unknown size) and small files
+    if should_cache {
+        let mut all_bytes = Vec::new();
+        let mut download_iter = client.iter_download(&downloadable);
+        while let Ok(Some(chunk)) = download_iter.next().await {
+            all_bytes.extend_from_slice(&chunk);
+            // Safety: abort if somehow exceeds 10MB (e.g. photo larger than expected)
+            if all_bytes.len() > 10 * 1024 * 1024 {
+                break;
+            }
         }
-        _ => (0, total_size.unwrap_or(0) - 1, false),
-    };
+
+        if all_bytes.len() <= 10 * 1024 * 1024 {
+            let _ = app.cache.store_cached_media(channel, id, media_id, &mime, &all_bytes);
+            let cached = app.cache.get_cached_media(channel, id).ok().flatten();
+            if let Some((path, mime, file_size)) = cached {
+                return serve_file_media(path, &mime, file_size, range).await;
+            }
+        }
+        // If store failed, fall through to stream the already-downloaded bytes
+        let file_size = all_bytes.len() as i64;
+        let content_type = ContentType::parse_flexible(&mime).unwrap_or(ContentType::Binary);
+        let (range_start, range_end, is_range) = parse_range_params(range.0, Some(file_size));
+        let bytes_to_send = if is_range { range_end - range_start + 1 } else { file_size };
+
+        let (mut duplex_write, duplex_read) = rocket::tokio::io::duplex(CHUNK_SIZE as usize * 2);
+        rocket::tokio::spawn(async move {
+            use rocket::tokio::io::AsyncWriteExt;
+            let start = range_start as usize;
+            let end = start + bytes_to_send as usize;
+            let _ = duplex_write.write_all(&all_bytes[start..end.min(all_bytes.len())]).await;
+        });
+
+        return Ok(MediaStream {
+            content_type,
+            total_size: Some(file_size),
+            range_start,
+            range_end,
+            is_range,
+            reader: duplex_read,
+        });
+    }
+
+    // Large file — stream directly from Telegram without caching
+    let content_type = ContentType::parse_flexible(&mime).unwrap_or(ContentType::Binary);
+    let (range_start, range_end, is_range) = parse_range_params(range.0, total_size);
 
     let skip_bytes = if is_range { range_start } else { 0 };
     let skip_chunks_count = (skip_bytes / CHUNK_SIZE as i64) as i32;
@@ -955,7 +1025,6 @@ async fn media_proxy(
         download_iter = download_iter.skip_chunks(skip_chunks_count);
     }
 
-    // Bridge DownloadIter chunks into an AsyncRead via DuplexStream
     let (duplex_write, duplex_read) = rocket::tokio::io::duplex(CHUNK_SIZE as usize * 2);
 
     rocket::tokio::spawn(async move {
@@ -986,6 +1055,49 @@ async fn media_proxy(
     Ok(MediaStream {
         content_type,
         total_size,
+        range_start,
+        range_end,
+        is_range,
+        reader: duplex_read,
+    })
+}
+
+fn parse_range_params(range: Option<(i64, Option<i64>)>, total_size: Option<i64>) -> (i64, i64, bool) {
+    match (range, total_size) {
+        (Some((start, end)), Some(total)) => {
+            let end = end.unwrap_or(total - 1).min(total - 1);
+            (start, end, true)
+        }
+        _ => (0, total_size.unwrap_or(0) - 1, false),
+    }
+}
+
+/// Serve a cached media file from disk with Range support.
+async fn serve_file_media(
+    path: PathBuf,
+    mime: &str,
+    file_size: i64,
+    range: RangeHeader,
+) -> std::result::Result<MediaStream, status::Custom<String>> {
+    let content_type = ContentType::parse_flexible(mime).unwrap_or(ContentType::Binary);
+    let (range_start, range_end, is_range) = parse_range_params(range.0, Some(file_size));
+    let bytes_to_send = if is_range { range_end - range_start + 1 } else { file_size };
+
+    let data = rocket::tokio::fs::read(&path)
+        .await
+        .map_err(|e| http_status(Status::InternalServerError, &e.to_string()))?;
+
+    let (mut duplex_write, duplex_read) = rocket::tokio::io::duplex(CHUNK_SIZE as usize * 2);
+    rocket::tokio::spawn(async move {
+        use rocket::tokio::io::AsyncWriteExt;
+        let start = range_start as usize;
+        let end = (start + bytes_to_send as usize).min(data.len());
+        let _ = duplex_write.write_all(&data[start..end]).await;
+    });
+
+    Ok(MediaStream {
+        content_type,
+        total_size: Some(file_size),
         range_start,
         range_end,
         is_range,
