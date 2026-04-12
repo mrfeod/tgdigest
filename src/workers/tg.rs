@@ -44,6 +44,7 @@ pub async fn fetch_posts(
     task: &Task,
     limit: usize,
     progress: Option<&std::sync::atomic::AtomicUsize>,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<Vec<Post>> {
     let channel = get_channel(client, task.channel_name.as_str()).await?;
     let mut messages = client
@@ -52,6 +53,10 @@ pub async fn fetch_posts(
         .limit(limit);
     let mut posts: Vec<Post> = Vec::new();
     while let Some(message) = messages.next().await? {
+        if cancelled.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            log::info!("Fetch cancelled for {}, returning {} posts", task.channel_name, posts.len());
+            break;
+        }
         let date = message.date().timestamp();
         if date > task.to_date {
             continue;
@@ -89,7 +94,7 @@ pub async fn get_channel_title(client: &grammers_client::Client, channel_name: &
 }
 
 pub async fn get_top_posts(client: grammers_client::Client, task: Task) -> Result<TopPost> {
-    let mut posts = fetch_posts(&client, &task, DEFAULT_FETCH_LIMIT, None).await?;
+    let mut posts = fetch_posts(&client, &task, DEFAULT_FETCH_LIMIT, None, None).await?;
     let post_top = TopPost::get_top(task.top_count, &mut posts);
     Ok(post_top)
 }

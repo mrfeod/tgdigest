@@ -36,7 +36,8 @@ use std::hash::Hasher;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[macro_use]
 extern crate rocket;
@@ -45,6 +46,8 @@ pub struct FetchProgress {
     pub fetched: AtomicUsize,
     pub limit: usize,
     pub done: AtomicBool,
+    pub cancelled: AtomicBool,
+    pub last_poll: AtomicU64,
     pub error: std::sync::Mutex<Option<String>>,
 }
 
@@ -114,6 +117,10 @@ fn get_cached_top_posts(app: &App, task: &Task) -> std::result::Result<(TopPost,
     Ok((TopPost::get_top(task.top_count, &mut fresh_posts), is_loading))
 }
 
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+}
+
 fn start_background_fetch(app: &Arc<App>, task: &Task, force: bool, force_limit: bool) -> String {
     let limit = if force_limit { 30000 } else { workers::tg::DEFAULT_FETCH_LIMIT };
     let task_id = format!("{}:{}:{}:{}:{}", task.channel_name, task.from_date, task.to_date, force, limit);
@@ -122,6 +129,8 @@ fn start_background_fetch(app: &Arc<App>, task: &Task, force: bool, force_limit:
         fetched: AtomicUsize::new(0),
         limit,
         done: AtomicBool::new(false),
+        cancelled: AtomicBool::new(false),
+        last_poll: AtomicU64::new(now_secs()),
         error: std::sync::Mutex::new(None),
     });
 
@@ -133,12 +142,15 @@ fn start_background_fetch(app: &Arc<App>, task: &Task, force: bool, force_limit:
                 return task_id;
             }
         }
+        // Clean up finished tasks
+        map.retain(|_, p| !p.done.load(Ordering::Relaxed));
         map.insert(task_id.clone(), progress.clone());
     }
 
     let app = app.clone();
     let task = task.clone();
     let tid = task_id.clone();
+    let progress_clone = progress.clone();
     tokio::spawn(async move {
         let result = background_fetch(&app, &task, limit, force, &progress).await;
         if let Err(e) = result {
@@ -146,6 +158,20 @@ fn start_background_fetch(app: &Arc<App>, task: &Task, force: bool, force_limit:
             *progress.error.lock().unwrap() = Some(e.to_string());
         }
         progress.done.store(true, Ordering::Relaxed);
+    });
+
+    // Watchdog: cancel fetch if client stops polling for 10s
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if progress_clone.done.load(Ordering::Relaxed) { break; }
+            let elapsed = now_secs() - progress_clone.last_poll.load(Ordering::Relaxed);
+            if elapsed > 10 {
+                log::info!("Client stopped polling, cancelling fetch");
+                progress_clone.cancelled.store(true, Ordering::Relaxed);
+                break;
+            }
+        }
     });
 
     task_id
@@ -163,7 +189,7 @@ async fn background_fetch(
     if force {
         let posts = tokio::time::timeout(
             std::time::Duration::from_secs(120),
-            workers::tg::fetch_posts(&client, task, limit, Some(&progress.fetched)),
+            workers::tg::fetch_posts(&client, task, limit, Some(&progress.fetched), Some(&progress.cancelled)),
         ).await
             .map_err(|_| -> Box<dyn std::error::Error> { "Telegram fetch timed out".into() })??;
         let _ = app.cache.store_posts(&task.channel_name, &posts);
@@ -176,6 +202,10 @@ async fn background_fetch(
     )?;
 
     for (from, to) in &stale_ranges {
+        if progress.cancelled.load(Ordering::Relaxed) {
+            log::info!("Fetch cancelled between ranges for {}", task.channel_name);
+            break;
+        }
         log::debug!("Background fetching range [{} .. {}] for {}", from, to, task.channel_name);
         let sub_task = Task {
             from_date: *from,
@@ -184,7 +214,7 @@ async fn background_fetch(
         };
         let fetched = tokio::time::timeout(
             std::time::Duration::from_secs(120),
-            workers::tg::fetch_posts(&client, &sub_task, limit, Some(&progress.fetched)),
+            workers::tg::fetch_posts(&client, &sub_task, limit, Some(&progress.fetched), Some(&progress.cancelled)),
         ).await
             .map_err(|_| -> Box<dyn std::error::Error> { "Telegram fetch timed out".into() })??;
         let _ = app.cache.store_posts(&task.channel_name, &fetched);
@@ -456,6 +486,9 @@ fn fetch_progress_endpoint(
     app: &rocket::State<Arc<App>>,
 ) -> rocket::serde::json::Json<serde_json::Value> {
     let map = app.fetch_progress.lock().unwrap();
+    if let Some(progress) = map.get(task_id) {
+        progress.last_poll.store(now_secs(), Ordering::Relaxed);
+    }
     match map.get(task_id) {
         Some(progress) => {
             let fetched = progress.fetched.load(Ordering::Relaxed);
