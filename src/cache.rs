@@ -5,25 +5,17 @@ use crate::post::Post;
 use crate::util::Result;
 
 const DAY: i64 = 86400;
-const WEEK: i64 = 7 * DAY;
 const MONTH: i64 = 30 * DAY;
-const YEAR: i64 = 365 * DAY;
 
 const MAX_CACHED_MEDIA_SIZE: i64 = 10 * 1024 * 1024; // 10 MB
 
 /// Returns the cache TTL for a post based on its age.
-/// - Older than 1 year: None (never refresh)
-/// - 1 month – 1 year: 30 days
-/// - 1 week – 1 month: 7 days
-/// - Less than 1 week: 1 day
+/// - Older than 1 month: None (never refresh)
+/// - Less than 1 month: 1 day
 fn post_ttl(post_date: i64, now: i64) -> Option<i64> {
     let age = now - post_date;
-    if age > YEAR {
+    if age > MONTH {
         None // never refresh
-    } else if age > MONTH {
-        Some(MONTH)
-    } else if age > WEEK {
-        Some(WEEK)
     } else {
         Some(DAY)
     }
@@ -60,6 +52,11 @@ impl PostCache {
                 size INTEGER NOT NULL,
                 last_accessed INTEGER NOT NULL,
                 PRIMARY KEY (channel, msg_id)
+            );
+            CREATE TABLE IF NOT EXISTS channel_fetch_bounds (
+                channel TEXT NOT NULL PRIMARY KEY,
+                min_fetched_date INTEGER NOT NULL,
+                max_fetched_date INTEGER NOT NULL
             );",
         )?;
 
@@ -118,9 +115,29 @@ impl PostCache {
         )?;
 
         if cached_count == 0 {
-            // No cached data at all — the entire range is stale
-            log::debug!("Cache miss for {} [{} .. {}]: no cached posts", channel, from_date, to_date);
-            return Ok((vec![], vec![(from_date, to_date)]));
+            // No cached posts — check if we've previously fetched this range
+            let fetch_bounds: Option<(i64, i64)> = conn.query_row(
+                "SELECT min_fetched_date, max_fetched_date FROM channel_fetch_bounds WHERE channel = ?1",
+                params![channel],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).ok();
+
+            let uncovered = match fetch_bounds {
+                Some((min_fetched, max_fetched)) => {
+                    let mut ranges = Vec::new();
+                    if from_date < min_fetched {
+                        ranges.push((from_date, min_fetched));
+                    }
+                    if to_date > max_fetched {
+                        ranges.push((max_fetched, to_date));
+                    }
+                    ranges
+                }
+                None => vec![(from_date, to_date)],
+            };
+
+            log::debug!("Cache miss for {} [{} .. {}]: {} uncovered ranges", channel, from_date, to_date, uncovered.len());
+            return Ok((vec![], uncovered));
         }
 
         let mut stmt = conn.prepare(
@@ -148,8 +165,13 @@ impl PostCache {
             ))
         })?;
 
+        let mut all_min_date = i64::MAX;
+        let mut all_max_date = i64::MIN;
+
         for row in rows {
             let (post, fetched_at) = row?;
+            all_min_date = all_min_date.min(post.date);
+            all_max_date = all_max_date.max(post.date);
             let ttl = post_ttl(post.date, now);
             let is_fresh = match ttl {
                 None => true, // never expires
@@ -163,11 +185,38 @@ impl PostCache {
         }
 
         // Build contiguous stale ranges from stale post dates
-        let stale_ranges = if stale_dates.is_empty() {
+        let mut stale_ranges = if stale_dates.is_empty() {
             vec![]
         } else {
             Self::build_stale_ranges(&stale_dates, from_date, to_date)
         };
+
+        // Check for uncovered edges beyond what we've previously fetched
+        let fetch_bounds: Option<(i64, i64)> = conn.query_row(
+            "SELECT min_fetched_date, max_fetched_date FROM channel_fetch_bounds WHERE channel = ?1",
+            params![channel],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).ok();
+
+        match fetch_bounds {
+            Some((min_fetched, max_fetched)) => {
+                if from_date < min_fetched {
+                    stale_ranges.push((from_date, min_fetched));
+                }
+                if to_date > max_fetched {
+                    stale_ranges.push((max_fetched, to_date));
+                }
+            }
+            None => {
+                // No fetch bounds recorded yet — use cached post dates as estimate
+                if from_date < all_min_date {
+                    stale_ranges.push((from_date, all_min_date));
+                }
+                if to_date > all_max_date {
+                    stale_ranges.push((all_max_date, to_date));
+                }
+            }
+        }
 
         log::debug!(
             "Cache for {} [{} .. {}]: {} fresh, {} stale ranges",
@@ -178,38 +227,22 @@ impl PostCache {
         Ok((fresh_posts, stale_ranges))
     }
 
-    /// Group stale post dates into contiguous date ranges.
-    /// Uses the age-based TTL boundaries as natural split points.
+    /// Build stale range: all stale posts are within the last month,
+    /// so we return a single range covering from the boundary to to_date.
     fn build_stale_ranges(stale_dates: &[i64], from_date: i64, to_date: i64) -> Vec<(i64, i64)> {
         if stale_dates.is_empty() {
             return vec![];
         }
 
         let now = chrono::Utc::now().timestamp();
-        let mut ranges = Vec::new();
-
-        // Define TTL boundary timestamps
-        let boundary_1w = now - WEEK;
         let boundary_1m = now - MONTH;
-        let boundary_1y = now - YEAR;
 
-        // Check which age buckets contain stale posts
-        let has_recent = stale_dates.iter().any(|&d| d > boundary_1w);
-        let has_month = stale_dates.iter().any(|&d| d > boundary_1m && d <= boundary_1w);
-        let has_old = stale_dates.iter().any(|&d| d > boundary_1y && d <= boundary_1m);
-        // Posts older than 1 year never go stale, so no bucket for them.
-
-        if has_recent {
-            ranges.push((boundary_1w.max(from_date), to_date));
+        // Only posts younger than 1 month can be stale
+        if stale_dates.iter().any(|&d| d > boundary_1m) {
+            vec![(boundary_1m.max(from_date), to_date)]
+        } else {
+            vec![]
         }
-        if has_month {
-            ranges.push((boundary_1m.max(from_date), boundary_1w.min(to_date)));
-        }
-        if has_old {
-            ranges.push((boundary_1y.max(from_date), boundary_1m.min(to_date)));
-        }
-
-        ranges
     }
 
     pub fn store_posts(&self, channel: &str, posts: &[Post]) -> Result<()> {
@@ -228,6 +261,19 @@ impl PostCache {
 
         tx.commit()?;
         log::debug!("Cached {} posts for {}", posts.len(), channel);
+        Ok(())
+    }
+
+    pub fn update_fetch_bounds(&self, channel: &str, from_date: i64, to_date: i64) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.execute(
+            "INSERT INTO channel_fetch_bounds (channel, min_fetched_date, max_fetched_date)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(channel) DO UPDATE SET
+             min_fetched_date = MIN(min_fetched_date, excluded.min_fetched_date),
+             max_fetched_date = MAX(max_fetched_date, excluded.max_fetched_date)",
+            params![channel, from_date, to_date],
+        )?;
         Ok(())
     }
 

@@ -94,12 +94,19 @@ fn http_status_err<T>(status: Status, msg: &str) -> std::result::Result<T, statu
     Err(http_status(status, msg))
 }
 
-async fn get_top_posts_cached(app: &App, task: &Task, force: bool) -> std::result::Result<TopPost, Box<dyn std::error::Error>> {
+async fn get_top_posts_cached(app: &App, task: &Task, force: bool, force_limit: bool) -> std::result::Result<TopPost, Box<dyn std::error::Error>> {
+    let limit = if force_limit { 30000 } else { workers::tg::DEFAULT_FETCH_LIMIT };
+
     if force {
         // Force: fetch everything from Telegram
         let client = tg::TelegramAPI::client();
-        let mut posts = workers::tg::fetch_posts(&client, task).await?;
+        let mut posts = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            workers::tg::fetch_posts(&client, task, limit),
+        ).await
+            .map_err(|_| -> Box<dyn std::error::Error> { "Telegram fetch timed out".into() })??;
         let _ = app.cache.store_posts(&task.channel_name, &posts);
+        let _ = app.cache.update_fetch_bounds(&task.channel_name, task.from_date, task.to_date);
         return Ok(TopPost::get_top(task.top_count, &mut posts));
     }
 
@@ -112,18 +119,39 @@ async fn get_top_posts_cached(app: &App, task: &Task, force: bool) -> std::resul
         return Ok(TopPost::get_top(task.top_count, &mut fresh_posts));
     }
 
-    // Fetch only the stale sub-ranges from Telegram
+    // Fetch only the stale/uncovered sub-ranges from Telegram
     let client = tg::TelegramAPI::client();
     for (from, to) in &stale_ranges {
-        log::debug!("Fetching stale range [{} .. {}] for {}", from, to, task.channel_name);
+        log::debug!("Fetching range [{} .. {}] for {}", from, to, task.channel_name);
         let sub_task = Task {
             from_date: *from,
             to_date: *to,
             ..task.clone()
         };
-        let fetched = workers::tg::fetch_posts(&client, &sub_task).await?;
-        let _ = app.cache.store_posts(&task.channel_name, &fetched);
-        fresh_posts.extend(fetched);
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            workers::tg::fetch_posts(&client, &sub_task, limit),
+        ).await {
+            Ok(Ok(fetched)) => {
+                let _ = app.cache.store_posts(&task.channel_name, &fetched);
+                let _ = app.cache.update_fetch_bounds(&task.channel_name, *from, *to);
+                fresh_posts.extend(fetched);
+            }
+            Ok(Err(e)) => {
+                log::error!("TG fetch error for [{} .. {}]: {}", from, to, e);
+                if fresh_posts.is_empty() {
+                    return Err(e);
+                }
+                break;
+            }
+            Err(_) => {
+                log::error!("TG fetch timeout for [{} .. {}]", from, to);
+                if fresh_posts.is_empty() {
+                    return Err("Telegram fetch timed out".into());
+                }
+                break;
+            }
+        }
     }
 
     // Deduplicate by post id (cached + freshly fetched may overlap)
@@ -199,7 +227,7 @@ async fn favicon(app: &rocket::State<Arc<App>>) -> Option<NamedFile> {
 async fn index(
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
-    return digest("ithueti", "ithueti", None, None, None, None, None, app).await;
+    return digest("ithueti", "ithueti", None, None, None, None, None, None, app).await;
 }
 
 #[get("/pic/<channel>")]
@@ -258,6 +286,7 @@ async fn digest_by_week(
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
         force,
+        None,
         app,
     )
     .await
@@ -286,6 +315,7 @@ async fn digest_by_month(
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
         force,
+        None,
         app,
     )
     .await
@@ -312,12 +342,13 @@ async fn digest_by_year(
         Some(from_date.timestamp()),
         Some(to_date.timestamp()),
         force,
+        None,
         app,
     )
     .await
 }
 
-#[get("/digest/<mode>/<channel>?<top_count>&<editor_choice>&<from_date>&<to_date>&<force>")]
+#[get("/digest/<mode>/<channel>?<top_count>&<editor_choice>&<from_date>&<to_date>&<force>&<force_limit>")]
 async fn digest(
     mode: &str,
     channel: &str,
@@ -326,6 +357,7 @@ async fn digest(
     from_date: Option<i64>,
     to_date: Option<i64>,
     force: Option<bool>,
+    force_limit: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let task = Task::default();
@@ -345,7 +377,7 @@ async fn digest(
         return http_status_err(Status::BadRequest, "Provided date is not allowed");
     }
 
-    let post_top = get_top_posts_cached(&app, &task, force.unwrap_or(false))
+    let post_top = get_top_posts_cached(&app, &task, force.unwrap_or(false), force_limit.unwrap_or(false))
         .await
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
@@ -566,7 +598,7 @@ async fn video(
 
     let tg_task = task.clone();
     let force = force.unwrap_or(false);
-    let post_top = get_top_posts_cached(&app, &tg_task, force)
+    let post_top = get_top_posts_cached(&app, &tg_task, force, false)
         .await
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 

@@ -37,23 +37,25 @@ pub async fn download_pic(
     Ok(photo_out)
 }
 
-pub async fn fetch_posts(client: &grammers_client::Client, task: &Task) -> Result<Vec<Post>> {
+pub const DEFAULT_FETCH_LIMIT: usize = 1000;
+
+pub async fn fetch_posts(client: &grammers_client::Client, task: &Task, limit: usize) -> Result<Vec<Post>> {
     let channel = get_channel(client, task.channel_name.as_str()).await?;
-    let from_dt = chrono::DateTime::from_timestamp(task.from_date, 0)
-        .unwrap()
-        .fixed_offset();
-    let to_dt = chrono::DateTime::from_timestamp(task.to_date, 0)
-        .unwrap()
-        .fixed_offset();
     let mut messages = client
-        .search_messages(&channel)
-        .min_date(&from_dt)
-        .max_date(&to_dt)
-        .limit(30000);
+        .iter_messages(channel)
+        .max_date(task.to_date as i32)
+        .limit(limit);
     let mut posts: Vec<Post> = Vec::new();
     while let Some(message) = messages.next().await? {
+        let date = message.date().timestamp();
+        if date > task.to_date {
+            continue;
+        }
+        if date < task.from_date {
+            break;
+        }
         posts.push(Post {
-            date: message.date().timestamp(),
+            date,
             id: message.id(),
             views: message.view_count(),
             forwards: message.forward_count(),
@@ -79,7 +81,7 @@ pub async fn get_channel_title(client: &grammers_client::Client, channel_name: &
 }
 
 pub async fn get_top_posts(client: grammers_client::Client, task: Task) -> Result<TopPost> {
-    let mut posts = fetch_posts(&client, &task).await?;
+    let mut posts = fetch_posts(&client, &task, DEFAULT_FETCH_LIMIT).await?;
     let post_top = TopPost::get_top(task.top_count, &mut posts);
     Ok(post_top)
 }
