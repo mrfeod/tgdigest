@@ -39,11 +39,30 @@ pub async fn download_pic(
 
 pub async fn fetch_posts(client: &grammers_client::Client, task: &Task) -> Result<Vec<Post>> {
     let channel = get_channel(client, task.channel_name.as_str()).await?;
+    let from_dt = chrono::DateTime::from_timestamp(task.from_date, 0)
+        .unwrap()
+        .fixed_offset();
+    let to_dt = chrono::DateTime::from_timestamp(task.to_date, 0)
+        .unwrap()
+        .fixed_offset();
     let mut messages = client
-        .iter_messages(channel)
-        .max_date(task.to_date as i32)
+        .search_messages(&channel)
+        .min_date(&from_dt)
+        .max_date(&to_dt)
         .limit(30000);
-    let posts = Post::get_by_date(&mut messages, task.from_date, task.to_date).await?;
+    let mut posts: Vec<Post> = Vec::new();
+    while let Some(message) = messages.next().await? {
+        posts.push(Post {
+            date: message.date().timestamp(),
+            id: message.id(),
+            views: message.view_count(),
+            forwards: message.forward_count(),
+            replies: message.reply_count(),
+            reactions: message.reaction_count(),
+            message: Some(message.msg.message),
+            image: None,
+        });
+    }
     log::debug!(
         "Fetched {} posts for https://t.me/{} from {} to {}",
         posts.len(),
