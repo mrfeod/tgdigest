@@ -27,7 +27,7 @@
             </thead>
             <tbody></tbody>
         </table>
-        <iframe src="/view/{{ channel_name }}/{{ card.id }}" style="width:100%;border:none;max-height:900px;" loading="lazy"></iframe>
+        <iframe src="/view/{{ channel_name }}/{{ card.id }}?iframe=true" style="width:100%;border:none;max-height:900px;" loading="lazy" scrolling="no"></iframe>
         <h5>Made with <a href="https://github.com/mrfeod/tgdigest">https://github.com/mrfeod/tgdigest</a></h5>
     </div>
     {% endfor %}
@@ -44,7 +44,7 @@
             </thead>
             <tbody></tbody>
         </table>
-        <iframe src="/view/{{ channel_name }}/{{ editor_choice_id }}" style="width:100%;border:none;max-height:900px;" loading="lazy"></iframe>
+        <iframe src="/view/{{ channel_name }}/{{ editor_choice_id }}?iframe=true" style="width:100%;border:none;max-height:900px;" loading="lazy" scrolling="no"></iframe>
         <h5>Made with <a href="https://github.com/mrfeod/tgdigest">https://github.com/mrfeod/tgdigest</a></h5>
     </div>
     {% endif %}

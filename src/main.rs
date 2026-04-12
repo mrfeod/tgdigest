@@ -660,7 +660,7 @@ async fn post_json(
     Ok(rocket::serde::json::Json(post))
 }
 
-#[get("/view/<channel>/<id>?<views>&<forwards>&<reactions>&<comments>&<px_limit>&<dark>")]
+#[get("/view/<channel>/<id>?<views>&<forwards>&<reactions>&<comments>&<px_limit>&<dark>&<iframe>")]
 async fn view_post(
     channel: &str,
     id: i32,
@@ -670,6 +670,7 @@ async fn view_post(
     comments: Option<bool>,
     px_limit: Option<u32>,
     dark: Option<bool>,
+    iframe: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
     let task = Task {
@@ -707,6 +708,7 @@ async fn view_post(
         .map(|dt| dt.format("%d/%m/%Y %H:%M").to_string())
         .unwrap_or_default());
     ctx.insert("dark", &dark.unwrap_or(false));
+    ctx.insert("iframe", &iframe.unwrap_or(false));
 
     let show_views = views.unwrap_or(true);
     let show_forwards = forwards.unwrap_or(true);

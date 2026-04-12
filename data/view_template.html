@@ -5,261 +5,32 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-
-:root {
-  --bg: #ffffff;
-  --card-bg: #ffffff;
-  --card-border: #e0e0e0;
-  --text: #222222;
-  --text-secondary: #707579;
-  --link: #3390ec;
-  --code-bg: #f4f4f4;
-  --forward-bg: #f0f4f8;
-  --spoiler-bg: #c0c0c0;
-  --border-accent: #3390ec;
-  --scrollbar-thumb: #c0c0c0;
-  --blockquote-text: #707579;
-  --web-desc: #707579;
-}
-
-{% if dark %}
-:root {
-  --bg: #000000;
-  --card-bg: #000000;
-  --card-border: #2c2c2c;
-  --text: #f5f5f5;
-  --text-secondary: #8e8e93;
-  --link: #6ab2f2;
-  --code-bg: #1c1c1e;
-  --forward-bg: #1c1c1e;
-  --spoiler-bg: #f5f5f5;
-  --border-accent: #3390ec;
-  --scrollbar-thumb: #3a3a3c;
-  --blockquote-text: #a8b4c0;
-  --web-desc: #a8b4c0;
-}
-{% endif %}
-
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); display: flex; justify-content: center; padding: 16px; }
-.post { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 12px; max-width: 560px; width: 100%; overflow: hidden; }
-.post-scroll { {% if px_limit %}max-height: {{ px_limit }}px; overflow-y: auto;{% endif %} }
-.post-scroll::-webkit-scrollbar { width: 6px; }
-.post-scroll::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
-.post-body { padding: 0 14px 12px; }
-.post-body.no-top-pad { padding-top: 0; }
-.post-body:not(.no-top-pad) { padding-top: 12px; }
-
-/* Channel header */
-.channel-header { display: flex; align-items: center; gap: 8px; padding: 0 14px; height: 32px; }
-.channel-header img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
-.channel-header .ch-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.channel-header .ch-links { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
-.channel-header .ch-links a { color: var(--text-secondary); text-decoration: none; }
-.channel-header .ch-links a:hover { color: var(--link); }
-.channel-header .ch-date { margin-left: auto; font-size: 11px; color: var(--text-secondary); white-space: nowrap; flex-shrink: 0; }
-
-/* Text */
-.text { font-size: 15px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; }
-.text a { color: var(--link); text-decoration: none; }
-.text a:hover { text-decoration: underline; }
-.text b { font-weight: 600; }
-.text code { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 3px; font-size: 13px; }
-.text pre { background: var(--code-bg); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 6px 0; font-size: 13px; }
-.text pre code { background: none; padding: 0; }
-.text .spoiler { background: var(--spoiler-bg); color: var(--spoiler-bg); border-radius: 2px; cursor: pointer; transition: all .2s; }
-.text .spoiler.revealed { background: transparent; color: var(--text); }
-.text blockquote { border-left: 3px solid var(--border-accent); padding-left: 10px; margin: 4px 0; color: var(--blockquote-text); }
-
-/* Media */
-.media { margin: 0; }
-.media > img { width: 100%; display: block; object-fit: contain; max-height: 500px; }
-.media > video, .media > .video-wrap > video { width: 100%; display: block; object-fit: cover; max-height: 500px; }
-.media audio { width: 100%; margin: 8px 0; }
-.video-wrap { position: relative; cursor: pointer; }
-.video-wrap .play-btn { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 48px; height: 48px; background: rgba(0,0,0,0.5); border-radius: 50%; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 1; }
-.video-wrap .play-btn::after { content: ''; display: block; width: 0; height: 0; border-style: solid; border-width: 10px 0 10px 18px; border-color: transparent transparent transparent #fff; margin-left: 3px; }
-.video-wrap.playing .play-btn { display: none; }
-.album { display: grid; gap: 2px; }
-.album-2 { grid-template-columns: 1fr 1fr; }
-.album-3 { grid-template-columns: 1fr 1fr; }
-.album-3 > :first-child { grid-row: 1 / 3; }
-.album-4 { grid-template-columns: 1fr 1fr; }
-.album-5 { grid-template-columns: 1fr 1fr 1fr; }
-.album-5 > :nth-child(n+4) { grid-column: span 1; }
-.album-6 { grid-template-columns: 1fr 1fr 1fr; }
-.album-7 { grid-template-columns: 1fr 1fr 1fr; }
-.album-7 > :first-child { grid-column: 1 / 3; }
-.album-8 { grid-template-columns: 1fr 1fr 1fr; }
-.album-8 > :first-child { grid-column: 1 / 3; }
-.album-9 { grid-template-columns: 1fr 1fr 1fr; }
-.album-10 { grid-template-columns: 1fr 1fr 1fr; }
-.album-10 > :first-child { grid-column: 1 / 3; }
-.album img, .album video, .album .video-wrap { width: 100%; height: 100%; }
-.album img, .album video { object-fit: cover; display: block; }
-
-/* Document */
-.document { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
-.document .doc-icon { width: 40px; height: 40px; background: var(--border-accent); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; color: #fff; }
-.document .doc-info { min-width: 0; }
-.document .doc-name { font-size: 14px; color: var(--link); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.document .doc-size { font-size: 12px; color: var(--text-secondary); }
-
-/* Web page preview */
-.web-preview { border-left: 3px solid var(--border-accent); padding: 6px 10px; margin-top: 8px; }
-.web-preview .site { font-size: 12px; color: var(--border-accent); text-transform: uppercase; }
-.web-preview .wp-title { font-size: 14px; font-weight: 600; margin: 2px 0; }
-.web-preview .wp-desc { font-size: 13px; color: var(--web-desc); }
-.web-preview a { color: inherit; text-decoration: none; }
-
-/* Contact */
-.contact { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
-.contact .avatar { width: 44px; height: 44px; border-radius: 50%; background: var(--border-accent); display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 600; color: #fff; }
-.contact .cname { font-size: 14px; font-weight: 600; }
-.contact .cphone { font-size: 13px; color: var(--text-secondary); }
-
-/* Stats bar */
-.stats { display: flex; gap: 16px; padding: 8px 14px; color: var(--text-secondary); font-size: 13px; }
-.stats .stat { display: flex; align-items: center; gap: 4px; }
-.stats svg { width: 16px; height: 16px; fill: var(--text-secondary); }
+a { color: #00F; }
+.header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.header .name { font-weight: 600; font-size: 15px; }
+.header .date { color: #888; font-size: 13px; margin-left: auto; }
+.media img, .media video { max-width: 100%; max-height: 500px; display: block; border-radius: 8px; }
+.text { font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
 </style>
 </head>
 <body>
-<div class="post">
-  {# Channel header #}
-  {% if channel_title %}
-  <div class="channel-header">
-    <img src="{{ userpic_url }}" alt="">
-    <div class="ch-name">{{ channel_title }}</div>
-    <span class="ch-links"><a href="https://t.me/{{ channel_name }}/{{ post_id }}" target="_blank" rel="noopener">@{{
-        channel_name }}/{{ post_id }}</a>{% if forward_from and forward_from.from_username and forward_from.channel_post %}
-      → <a href="https://t.me/{{ forward_from.from_username }}/{{ forward_from.channel_post }}" target="_blank"
-        rel="noopener">@{{ forward_from.from_username }}/{{ forward_from.channel_post }}</a>{% endif %}</span>
-    <span class="ch-date">{{ post_date }}</span>
+{% if channel_title %}
+<div class="header">
+  <span class="name">{{ channel_title }}</span>
+  <span class="date">{{ post_date }}</span>
   </div>
   {% endif %}
 
-  <div class="post-scroll">
-    {# Album media #}
-    {% if album | length > 0 %}
-    <div class="media">
-      <div class="album album-{{ album | length }}">
-        {% for item in album %}
-          {% if item.photo %}
-          <img src="{{ item.photo.url }}" alt="">
-          {% elif item.video %}
-          <div class="video-wrap"><video src="{{ item.video.url }}" preload="metadata"></video>
-            <div class="play-btn"></div>
-          </div>
-          {% endif %}
-        {% endfor %}
-      </div>
-    </div>
-    {% elif photo %}
-    <div class="media"><img src="{{ photo.url }}" alt=""></div>
-    {% elif video %}
-    <div class="media">
-      <div class="video-wrap"><video src="{{ video.url }}" preload="metadata" {% if video.width %}width="{{ video.width }}" {%
-          endif %}></video>
-        <div class="play-btn"></div>
-      </div>
-    </div>
-    {% endif %}
-
-    {# Post body: text + other media #}
-    <div class="post-body{% if has_leading_media %} no-top-pad{% endif %}">
-    {# Text content #}
-    {% if rendered_text %}
-    <div class="text">{{ rendered_text | safe }}</div>
-    {% endif %}
-
-    {# Document / Audio #}
-    {% if document %}
-    <div class="document">
-      {% if document.audio %}
-      <div class="doc-icon">♫</div>
-      <div class="doc-info">
-        <div class="doc-name">{{ document.audio.title | default(value="Audio") }}{% if document.audio.performer %} — {{ document.audio.performer }}{% endif %}</div>
-        <audio src="{{ document.url }}" controls preload="metadata"></audio>
-      </div>
-      {% else %}
-      <a href="{{ document.url }}" target="_blank" style="display:flex;align-items:center;gap:10px;text-decoration:none;">
-        <div class="doc-icon">📄</div>
-        <div class="doc-info">
-          <div class="doc-name">{{ document.filename | default(value="Document") }}</div>
-          <div class="doc-size">{{ document.size | filesizeformat }}</div>
-        </div>
-      </a>
-      {% endif %}
-    </div>
-    {% endif %}
-
-    {# Contact #}
-    {% if contact %}
-    <div class="contact">
-      <div class="avatar">{{ contact.first_name | truncate(length=1, end="") }}</div>
-      <div>
-        <div class="cname">{{ contact.first_name }} {{ contact.last_name }}</div>
-        <div class="cphone">{{ contact.phone_number }}</div>
-      </div>
-    </div>
-    {% endif %}
-
-    {# Web page preview #}
-    {% if web_page %}
-    <div class="web-preview">
-      {% if web_page.site_name %}<div class="site">{{ web_page.site_name }}</div>{% endif %}
-      {% if web_page.title %}<div class="wp-title"><a href="{{ web_page.url }}">{{ web_page.title }}</a></div>{% endif %}
-      {% if web_page.description %}<div class="wp-desc">{{ web_page.description }}</div>{% endif %}
-    </div>
-    {% endif %}
-    </div>
-  </div>
-
-  {# Stats bar #}
-  {% if show_stats %}
-  <div class="stats">
-    {% if show_views %}
-    <div class="stat">
-      <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zm0 12.5c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
-      {{ views | default(value=0) }}
-    </div>
-    {% endif %}
-    {% if show_forwards %}
-    <div class="stat">
-      <svg viewBox="0 0 24 24"><path d="M12 8V4l8 8-8 8v-4H4V8h8z"/></svg>
-      {{ forwards | default(value=0) }}
-    </div>
-    {% endif %}
-    {% if show_reactions %}
-    <div class="stat">
-      <svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-      {{ reactions | default(value=0) }}
-    </div>
-    {% endif %}
-    {% if show_comments %}
-    <div class="stat">
-      <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-      {{ comments | default(value=0) }}
-    </div>
-    {% endif %}
-  </div>
+  {% if photo %}
+  <div class="media"><img src="{{ photo.url }}" alt=""></div>
+  {% elif video %}
+  <div class="media"><video src="{{ video.url }}" controls preload="metadata"></video></div>
   {% endif %}
-</div>
+
+{% if rendered_text %}
+<div class="text">{{ rendered_text | safe }}</div>
+{% endif %}
 <script>
-document.querySelectorAll('.spoiler').forEach(el => {
-  el.addEventListener('click', () => el.classList.toggle('revealed'));
-});
-  document.querySelectorAll('.video-wrap').forEach(wrap => {
-    const v = wrap.querySelector('video');
-    wrap.addEventListener('click', () => {
-      if (v.paused) v.play(); else v.pause();
-    });
-    v.addEventListener('play', () => wrap.classList.add('playing'));
-    v.addEventListener('pause', () => wrap.classList.remove('playing'));
-    v.addEventListener('ended', () => wrap.classList.remove('playing'));
-    wrap.addEventListener('mouseenter', () => v.setAttribute('controls', ''));
-    wrap.addEventListener('mouseleave', () => v.removeAttribute('controls'));
-  });
 // Notify parent iframe of our height for auto-resize
 if (window.parent !== window) {
   function postHeight() {
