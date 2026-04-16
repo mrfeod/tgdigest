@@ -1,0 +1,20 @@
+services:
+  tgdigest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tgdigest:local
+    ports:
+      - "8000:8000"
+    command: ["-c", "/app/config/config.json"]
+    stdin_open: true
+    tty: true
+    environment:
+      ROCKET_ADDRESS: 0.0.0.0
+      ROCKET_PORT: "8000"
+    volumes:
+      - ${TGDIGEST_CONFIG_DIR:-./config}:/app/config:ro
+      - ${TGDIGEST_DATA_DIR:-./data}:/app/data:ro
+      - ${TGDIGEST_OUTPUT_DIR:-./output}:/app/output
+      - ${TGDIGEST_STATE_DIR:-./state}:/app/state
+    restart: unless-stopped

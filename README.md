@@ -12,6 +12,46 @@ As additional artifact the tool can create top/digest page: https://ithueti.club
 cargo build
 ```
 
+# Docker
+
+Run with Docker Compose:
+```sh
+docker compose up --build -d
+```
+
+If this is your first run and there is no valid `tgdigest.session`, initialize it once in interactive mode:
+```sh
+docker compose run --rm tgdigest -c /app/config/config.json
+```
+Enter phone/code/password when prompted. After that, the session is stored in `./state`, and regular `docker compose up -d` works without interactive prompts.
+
+Default directory mounts in `docker-compose.yml`:
+- `./config -> /app/config` (read-only, for secrets)
+- `./data -> /app/data` (read-only, templates)
+- `./output -> /app/output`
+- `./state -> /app/state`
+
+Override paths with environment variables, for example:
+```sh
+TGDIGEST_CONFIG_DIR=~/tgdigest-config \
+TGDIGEST_DATA_DIR=~/tgdigest-private/data \
+TGDIGEST_OUTPUT_DIR=$(pwd)/output \
+TGDIGEST_STATE_DIR=$(pwd)/state \
+docker compose up --build -d
+```
+
+Example `docker-config.json`:
+```json
+{
+        "input_dir": "/app/data",
+        "output_dir": "/app/output",
+        "tg_session": "/app/state/tgdigest.session",
+        "tg_id": <tg_app_id>,
+        "tg_hash": "<tg_app_hash>",
+        "proxy_url": "socks5://host:port"
+}
+```
+
 # Run
 You need to specify the configuration file as an argument.
 ```sh

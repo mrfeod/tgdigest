@@ -25,6 +25,10 @@ impl CardRenderer {
             BrowserConfig::builder()
                 .window_size(2000, 30000)
                 .viewport(viewport)
+                .no_sandbox()
+                .arg("--no-sandbox")
+                .arg("--disable-setuid-sandbox")
+                .arg("--disable-dev-shm-usage")
                 .build()?,
         )
         .await?;

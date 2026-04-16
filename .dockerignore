@@ -1,0 +1,11 @@
+target/
+.git/
+.gitignore
+Dockerfile
+README.md
+*.session
+*.db
+output/
+config.json
+config*.json
+**/.DS_Store
