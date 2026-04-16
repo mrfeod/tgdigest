@@ -1,5 +1,7 @@
 # tgdigest
 
+[![Build and push Docker image](https://github.com/mrfeod/tgdigest/actions/workflows/docker.yml/badge.svg)](https://github.com/mrfeod/tgdigest/actions/workflows/docker.yml)
+
 # What's this?
 It's a tool to generate a video from telegram channel's posts.
 
