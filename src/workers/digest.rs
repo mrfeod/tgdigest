@@ -5,8 +5,50 @@ use crate::util::*;
 use crate::workers::block::Block;
 use crate::workers::card::Card;
 
-pub fn create_context(post_top: TopPost, task: Task, channel_title: &str) -> Result<RenderingContext> {
-    log::debug!("Creating digest.html");
+#[derive(serde::Serialize)]
+pub struct DigestData {
+    pub blocks: Vec<Block>,
+    pub editor_choice_id: i32,
+    pub channel_name: String,
+    pub channel_title: String,
+    pub userpic_url: String,
+}
+
+impl DigestData {
+    pub fn to_context(&self) -> RenderingContext {
+        let mut context = RenderingContext::new();
+        context.insert("blocks", &self.blocks);
+        context.insert("editor_choice_id", &self.editor_choice_id);
+        context.insert("channel_name", &self.channel_name);
+        context.insert("channel_title", &self.channel_title);
+        context.insert("userpic_url", &self.userpic_url);
+        context
+    }
+
+    /// Slim JSON for /data/ endpoint: blocks have only header and cards: [[id, count], ...]
+    pub fn to_json(&self) -> serde_json::Value {
+        let blocks: Vec<serde_json::Value> = self.blocks.iter().map(|b| {
+            let cards: Vec<[i32; 2]> = b.cards.as_ref().map(|cards| {
+                cards.iter().map(|c| [c.id, c.count.unwrap_or(0)]).collect()
+            }).unwrap_or_default();
+            serde_json::json!({
+                "header": b.header,
+                "cards": cards,
+            })
+        }).collect();
+        serde_json::json!({
+            "status": "ready",
+            "blocks": blocks,
+            "editor_choice_id": self.editor_choice_id,
+            "channel_name": self.channel_name,
+            "channel_title": self.channel_title,
+            "userpic_url": self.userpic_url,
+        })
+    }
+}
+
+pub fn create_digest_data(post_top: TopPost, task: Task, channel_title: &str) -> Result<DigestData> {
+    log::debug!("Creating digest data");
     let get_posts = |action: ActionType| post_top.index(action);
     let blocks = vec![
         Block {
@@ -38,12 +80,11 @@ pub fn create_context(post_top: TopPost, task: Task, channel_title: &str) -> Res
     .filter(|b| b.cards.is_some())
     .collect::<Vec<Block>>();
 
-    let mut context = RenderingContext::new();
-    context.insert("blocks", &blocks);
-    context.insert("editor_choice_id", &task.editor_choice_post_id);
-    context.insert("channel_name", &task.channel_name.as_str());
-    context.insert("channel_title", channel_title);
-    context.insert("userpic_url", &format!("/userpic/{}", &task.channel_name));
-
-    Ok(context)
+    Ok(DigestData {
+        blocks,
+        editor_choice_id: task.editor_choice_post_id,
+        channel_name: task.channel_name.clone(),
+        channel_title: channel_title.to_string(),
+        userpic_url: format!("/userpic/{}", &task.channel_name),
+    })
 }

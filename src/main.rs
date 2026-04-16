@@ -39,6 +39,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rocket::serde::json::Json;
+
 #[macro_use]
 extern crate rocket;
 
@@ -425,16 +427,16 @@ async fn digest(
     force_limit: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
-    let task = Task::default();
+    let defaults = Task::default();
     let task = Task {
         command: Commands::Digest {},
         mode: mode.to_string(),
         channel_name: channel.to_string(),
-        top_count: top_count.unwrap_or(task.top_count),
-        editor_choice_post_id: editor_choice.unwrap_or(task.editor_choice_post_id),
-        from_date: from_date.unwrap_or(task.from_date),
-        to_date: to_date.unwrap_or(task.to_date),
-        ..task
+        top_count: top_count.unwrap_or(defaults.top_count),
+        editor_choice_post_id: editor_choice.unwrap_or(defaults.editor_choice_post_id),
+        from_date: from_date.unwrap_or(defaults.from_date),
+        to_date: to_date.unwrap_or(defaults.to_date),
+        ..defaults
     };
     log::debug!("Working on task: {}", task.to_string().unwrap());
 
@@ -445,41 +447,76 @@ async fn digest(
     let force = force.unwrap_or(false);
     let force_limit = force_limit.unwrap_or(false);
 
-    // Get whatever is in cache right now
-    let (post_top, is_loading) = get_cached_top_posts(&app, &task)
-        .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
-    let is_loading = is_loading || force;
+    // Detect async template: if template source contains "data_url", it fetches data via JS
+    let template_name = format!("{}/digest_template.html", task.mode);
+    let template_path = app.ctx.input_dir.join(&template_name);
+    let is_async_template = std::fs::read_to_string(&template_path)
+        .map(|s| s.contains("data_url"))
+        .unwrap_or(false);
 
-    // If cache is incomplete or force, start background fetch
-    let mut task_id = String::new();
-    if is_loading {
-        task_id = start_background_fetch(app.inner(), &task, force, force_limit);
+    if is_async_template {
+        // Async template — render shell, JS will fetch from /data/
+        let mut data_url = format!(
+            "/data/{}/{}?from_date={}&to_date={}&top_count={}&editor_choice={}",
+            task.mode, task.channel_name, task.from_date, task.to_date,
+            task.top_count, task.editor_choice_post_id
+        );
+        if force { data_url.push_str("&force=true"); }
+        if force_limit { data_url.push_str("&force_limit=true"); }
+
+        let client = tg::TelegramAPI::client();
+        let channel_title = workers::tg::get_channel_title(&client, &task.channel_name)
+            .await
+            .unwrap_or_else(|_| task.channel_name.clone());
+
+        let mut context = tera::Context::new();
+        context.insert("channel_name", &task.channel_name);
+        context.insert("channel_title", &channel_title);
+        context.insert("userpic_url", &format!("/userpic/{}", &task.channel_name));
+        context.insert("data_url", &data_url);
+
+        let digest = app.html_renderer.render(&template_name, &context)
+            .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+        Ok(content::RawHtml(digest))
+    } else {
+        // Static template — block until data is ready
+        let (_, is_stale) = get_cached_top_posts(&app, &task)
+            .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+
+        if is_stale || force {
+            let task_id = start_background_fetch(app.inner(), &task, force, force_limit);
+            // Wait for fetch completion, keeping watchdog alive
+            loop {
+                {
+                    let map = app.fetch_progress.lock().unwrap();
+                    if let Some(p) = map.get(&task_id) {
+                        if p.done.load(Ordering::Relaxed) { break; }
+                        p.last_poll.store(now_secs(), Ordering::Relaxed);
+                    } else {
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }
+
+        let (post_top, _) = get_cached_top_posts(&app, &task)
+            .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+
+        let client = tg::TelegramAPI::client();
+        let channel_title = workers::tg::get_channel_title(&client, &task.channel_name)
+            .await
+            .unwrap_or_else(|_| task.channel_name.clone());
+
+        let data = workers::digest::create_digest_data(post_top, task.clone(), &channel_title)
+            .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+        let context = data.to_context();
+
+        let digest = app.html_renderer.render(&template_name, &context)
+            .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+        log::trace!("Digest html rendered (static): length={}", digest.len());
+        Ok(content::RawHtml(digest))
     }
-
-    let client = tg::TelegramAPI::client();
-    let channel_title = workers::tg::get_channel_title(&client, &task.channel_name)
-        .await
-        .unwrap_or_else(|_| task.channel_name.clone());
-
-    let mut digest_context = match workers::digest::create_context(post_top, task.clone(), &channel_title) {
-        Ok(digest_context) => digest_context,
-        Err(e) => {
-            return http_status_err(Status::InternalServerError, e.to_string().as_ref());
-        }
-    };
-    digest_context.insert("is_loading", &is_loading);
-    digest_context.insert("task_id", &task_id);
-    let digest = match app.html_renderer.render(
-        format!("{}/digest_template.html", task.mode).as_str(),
-        &digest_context,
-    ) {
-        Ok(digest) => digest,
-        Err(e) => {
-            return http_status_err(Status::InternalServerError, e.to_string().as_ref());
-        }
-    };
-    log::trace!("Digest html rendered: lenght={}", digest.len());
-    Ok(content::RawHtml(digest))
 }
 
 #[get("/progress/<task_id>")]
@@ -512,6 +549,89 @@ fn fetch_progress_endpoint(
             }))
         }
     }
+}
+
+#[get("/data/<mode>/<channel>?<top_count>&<editor_choice>&<from_date>&<to_date>&<force>&<force_limit>&<task_id>")]
+async fn data_endpoint(
+    mode: &str,
+    channel: &str,
+    top_count: Option<usize>,
+    editor_choice: Option<i32>,
+    from_date: Option<i64>,
+    to_date: Option<i64>,
+    force: Option<bool>,
+    force_limit: Option<bool>,
+    task_id: Option<String>,
+    app: &rocket::State<Arc<App>>,
+) -> std::result::Result<Json<serde_json::Value>, status::Custom<String>> {
+    let defaults = Task::default();
+    let task = Task {
+        command: Commands::Digest {},
+        mode: mode.to_string(),
+        channel_name: channel.to_string(),
+        top_count: top_count.unwrap_or(defaults.top_count),
+        editor_choice_post_id: editor_choice.unwrap_or(defaults.editor_choice_post_id),
+        from_date: from_date.unwrap_or(defaults.from_date),
+        to_date: to_date.unwrap_or(defaults.to_date),
+        ..defaults
+    };
+
+    if task.from_date < 0 || task.to_date < 0 {
+        return http_status_err(Status::BadRequest, "Provided date is not allowed");
+    }
+
+    // 1. If task_id provided, check its progress
+    if let Some(ref tid) = task_id {
+        let map = app.fetch_progress.lock().unwrap();
+        if let Some(progress) = map.get(tid.as_str()) {
+            progress.last_poll.store(now_secs(), Ordering::Relaxed);
+            if !progress.done.load(Ordering::Relaxed) {
+                return Ok(Json(serde_json::json!({
+                    "status": "loading",
+                    "task_id": tid,
+                    "fetched": progress.fetched.load(Ordering::Relaxed),
+                    "limit": progress.limit,
+                })));
+            }
+            let error = progress.error.lock().unwrap().clone();
+            if let Some(err) = error {
+                return Ok(Json(serde_json::json!({"status": "error", "error": err})));
+            }
+            // Done successfully — fall through to return data
+        }
+    }
+
+    // 2. Check cache
+    let (_, is_stale) = get_cached_top_posts(&app, &task)
+        .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+
+    let force = force.unwrap_or(false);
+    let need_fetch = is_stale || force;
+
+    if need_fetch && task_id.is_none() {
+        let tid = start_background_fetch(app.inner(), &task, force, force_limit.unwrap_or(false));
+        let limit = if force_limit.unwrap_or(false) { 30000 } else { workers::tg::DEFAULT_FETCH_LIMIT };
+        return Ok(Json(serde_json::json!({
+            "status": "loading",
+            "task_id": tid,
+            "fetched": 0,
+            "limit": limit,
+        })));
+    }
+
+    // 3. Return data
+    let (post_top, _) = get_cached_top_posts(&app, &task)
+        .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+
+    let client = tg::TelegramAPI::client();
+    let channel_title = workers::tg::get_channel_title(&client, &task.channel_name)
+        .await
+        .unwrap_or_else(|_| task.channel_name.clone());
+
+    let data = workers::digest::create_digest_data(post_top, task, &channel_title)
+        .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+
+    Ok(Json(data.to_json()))
 }
 
 #[get(
@@ -1373,6 +1493,7 @@ async fn main() {
                 index,
                 image,
                 fetch_progress_endpoint,
+                data_endpoint,
                 digest_by_week,
                 digest_by_month,
                 digest_by_year,
