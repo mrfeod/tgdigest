@@ -21,7 +21,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    cargo build --release --locked
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release --locked && \
+    cp /app/target/release/tgdigest /app/tgdigest
 
 
 FROM debian:bookworm-slim AS runtime
@@ -54,7 +56,7 @@ ENV ROCKET_PORT=8000
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/tgdigest /usr/local/bin/tgdigest
+COPY --from=builder /app/tgdigest /usr/local/bin/tgdigest
 
 RUN mkdir -p /app/config /app/data /app/output /app/state \
     && useradd --create-home --uid 10001 appuser \
