@@ -264,6 +264,21 @@ impl PostCache {
         Ok(())
     }
 
+    /// Touch fetched_at for all cached posts in a range so they're no longer stale.
+    /// Covers posts that exist in cache but were not returned by the API (e.g. deleted).
+    pub fn touch_posts_in_range(&self, channel: &str, from_date: i64, to_date: i64) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let now = chrono::Utc::now().timestamp();
+        let updated = conn.execute(
+            "UPDATE posts SET fetched_at = ?1 WHERE channel = ?2 AND date >= ?3 AND date <= ?4",
+            params![now, channel, from_date, to_date],
+        )?;
+        if updated > 0 {
+            log::debug!("Touched fetched_at for {} posts in range [{} .. {}] for {}", updated, from_date, to_date, channel);
+        }
+        Ok(())
+    }
+
     pub fn update_fetch_bounds(&self, channel: &str, from_date: i64, to_date: i64) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
         conn.execute(

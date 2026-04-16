@@ -193,6 +193,7 @@ async fn background_fetch(
         ).await
             .map_err(|_| -> Box<dyn std::error::Error> { "Telegram fetch timed out".into() })??;
         let _ = app.cache.store_posts(&task.channel_name, &posts);
+        let _ = app.cache.touch_posts_in_range(&task.channel_name, task.from_date, task.to_date);
         let _ = app.cache.update_fetch_bounds(&task.channel_name, task.from_date, task.to_date);
         return Ok(());
     }
@@ -218,6 +219,7 @@ async fn background_fetch(
         ).await
             .map_err(|_| -> Box<dyn std::error::Error> { "Telegram fetch timed out".into() })??;
         let _ = app.cache.store_posts(&task.channel_name, &fetched);
+        let _ = app.cache.touch_posts_in_range(&task.channel_name, *from, *to);
         let _ = app.cache.update_fetch_bounds(&task.channel_name, *from, *to);
     }
 
