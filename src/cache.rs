@@ -67,7 +67,7 @@ impl PostCache {
             .is_ok();
         if !schema_ok {
             log::info!("Posts table schema mismatch — recreating");
-            conn.execute_batch("DROP TABLE IF EXISTS posts; DROP TABLE IF EXISTS fetch_log;")?;
+            conn.execute_batch("DROP TABLE IF EXISTS posts; DROP TABLE IF EXISTS fetch_log; DELETE FROM channel_fetch_bounds;")?;
             conn.execute_batch(
                 "CREATE TABLE posts (
                     channel TEXT NOT NULL,

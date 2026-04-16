@@ -43,6 +43,24 @@
                 }
             }
         });
+        {% if is_loading %}
+        (function(){
+            function poll() {
+                fetch('/progress/' + encodeURIComponent('{{ task_id }}'))
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data.done) {
+                            var u = new URL(window.location.href);
+                            u.searchParams.delete('force');
+                            u.searchParams.delete('force_limit');
+                            window.location.href = u.toString();
+                        } else { setTimeout(poll, 1000); }
+                    })
+                    .catch(function() { setTimeout(poll, 2000); });
+            }
+            poll();
+        })();
+        {% endif %}
     </script>
 </body>
 
