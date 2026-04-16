@@ -95,6 +95,10 @@ impl PostCache {
         })
     }
 
+    pub fn media_dir(&self) -> &Path {
+        &self.media_dir
+    }
+
     // ── Post cache ─────────────────────────────────────────────────────
 
     /// Returns (fresh_posts, stale_ranges).

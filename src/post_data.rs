@@ -93,6 +93,7 @@ pub struct PhotoData {
 pub struct VideoData {
     pub id: i64,
     pub url: String,
+    pub thumb_url: String,
     pub mime_type: String,
     pub size: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -342,6 +343,7 @@ pub fn extract_media(
                 let video = VideoData {
                     id: doc.id,
                     url: format!("/media/{}/{}", channel_name, msg_id),
+                    thumb_url: format!("/thumb/{}/{}", channel_name, msg_id),
                     mime_type: doc.mime_type.clone(),
                     size: doc.size,
                     duration: video_attr.map(|v| v.duration),

@@ -59,6 +59,7 @@ struct App {
     html_renderer: HtmlRenderer,
     card_renderer: CardRenderer,
     fetch_progress: std::sync::Mutex<HashMap<String, Arc<FetchProgress>>>,
+    tg_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl App {
@@ -86,6 +87,7 @@ impl App {
             html_renderer,
             card_renderer,
             fetch_progress: std::sync::Mutex::new(HashMap::new()),
+            tg_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
         })
     }
 }
@@ -942,10 +944,15 @@ async fn view_post(
         ..Task::default()
     };
 
+    let _permit = app.tg_semaphore.clone().acquire_owned().await
+        .map_err(|_| http_status(Status::ServiceUnavailable, "Server is shutting down"))?;
+
     let client = tg::TelegramAPI::client();
     let post = workers::tg::get_post_data(client, task)
         .await
         .map_err(|e| http_status(Status::NotFound, e.to_string().as_ref()))?;
+
+    drop(_permit);
 
     // Render entities into HTML text
     let rendered_text = render_entities(&post.text, &post.entities);
@@ -1179,6 +1186,44 @@ impl<'r> rocket::response::Responder<'r, 'static> for MediaStream {
     }
 }
 
+#[get("/thumb/<channel>/<id>")]
+async fn thumb_proxy(
+    channel: &str,
+    id: i32,
+    app: &rocket::State<Arc<App>>,
+) -> std::result::Result<(ContentType, Vec<u8>), status::Custom<String>> {
+    // Check disk cache first (stored as thumb_{channel}_{id}.jpg in media dir)
+    let thumb_path = app.cache.media_dir().join(format!("thumb_{}_{}.jpg", channel, id));
+    if thumb_path.exists() {
+        let data = std::fs::read(&thumb_path)
+            .map_err(|e| http_status(Status::InternalServerError, &e.to_string()))?;
+        return Ok((ContentType::JPEG, data));
+    }
+
+    let permit = app.tg_semaphore.clone().acquire_owned().await
+        .map_err(|_| http_status(Status::ServiceUnavailable, "Server is shutting down"))?;
+
+    // Re-check after acquiring permit
+    if thumb_path.exists() {
+        drop(permit);
+        let data = std::fs::read(&thumb_path)
+            .map_err(|e| http_status(Status::InternalServerError, &e.to_string()))?;
+        return Ok((ContentType::JPEG, data));
+    }
+
+    let client = tg::TelegramAPI::client();
+    let (bytes, _mime) = workers::tg::download_thumb(&client, channel, id)
+        .await
+        .map_err(|e| http_status(Status::NotFound, &e.to_string()))?;
+
+    drop(permit);
+
+    // Cache to disk
+    let _ = std::fs::write(&thumb_path, &bytes);
+
+    Ok((ContentType::JPEG, bytes))
+}
+
 #[get("/media/<channel>/<id>")]
 async fn media_proxy(
     channel: &str,
@@ -1193,7 +1238,18 @@ async fn media_proxy(
         return serve_file_media(path, &mime, file_size, range).await;
     }
 
-    // Cache miss — fetch from Telegram
+    // Cache miss — fetch from Telegram (limited concurrency)
+    let permit = app.tg_semaphore.clone().acquire_owned().await
+        .map_err(|_| http_status(Status::ServiceUnavailable, "Server is shutting down"))?;
+
+    // Re-check cache — another request may have populated it while we waited
+    let cached = app.cache.get_cached_media(channel, id).ok().flatten();
+    if let Some((path, mime, file_size)) = cached {
+        drop(permit);
+        log::debug!("Serving cached media (after wait): {}/{}", channel, id);
+        return serve_file_media(path, &mime, file_size, range).await;
+    }
+
     let client = tg::TelegramAPI::client();
     let (downloadable, mime, total_size, media_id) = workers::tg::resolve_media(&client, channel, id)
         .await
@@ -1266,6 +1322,7 @@ async fn media_proxy(
 
     rocket::tokio::spawn(async move {
         use rocket::tokio::io::AsyncWriteExt;
+        let _permit = permit; // hold permit until streaming completes
         let mut writer = duplex_write;
         let mut remaining = bytes_to_send;
         let mut first = true;
@@ -1466,6 +1523,7 @@ async fn main() {
                 view_post,
                 post_image,
                 media_proxy,
+                thumb_proxy,
                 userpic_proxy,
                 localmedia_file
             ],

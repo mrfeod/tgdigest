@@ -1,4 +1,5 @@
 use grammers_client::types::{Downloadable, Media};
+use grammers_client::client::files::DownloadIter;
 
 use crate::context::AppContext;
 use crate::post::*;
@@ -266,4 +267,69 @@ pub async fn resolve_media(
     }
 
     Err("No downloadable media in message".into())
+}
+
+/// Download the thumbnail of a video/document.
+/// Returns (bytes, mime_type) — the thumb is small enough to download in one go.
+pub async fn download_thumb(
+    client: &grammers_client::Client,
+    channel_name: &str,
+    msg_id: i32,
+) -> Result<(Vec<u8>, String)> {
+    let channel = get_channel(client, channel_name).await?;
+    let message = client
+        .get_messages_by_id(channel, &[msg_id])
+        .await?
+        .pop()
+        .flatten()
+        .ok_or_else(|| format!("Message {}/{} not found", channel_name, msg_id))?;
+
+    let raw_media = message.msg.media.as_ref()
+        .ok_or("No media in message")?;
+
+    use grammers_tl_types::{enums, types};
+
+    let doc = match raw_media {
+        enums::MessageMedia::Document(md) => {
+            match md.document.as_ref() {
+                Some(enums::Document::Document(doc)) => doc,
+                _ => return Err("No document in message".into()),
+            }
+        }
+        _ => return Err("Message has no document media".into()),
+    };
+
+    // Find the best thumb size — prefer "m" (320px), fall back to largest available
+    let thumbs = doc.thumbs.as_ref()
+        .ok_or("Document has no thumbnails")?;
+
+    let best_type = thumbs.iter().find_map(|t| match t {
+        enums::PhotoSize::Size(s) if s.r#type == "m" => Some(s.r#type.clone()),
+        _ => None,
+    }).or_else(|| thumbs.iter().rev().find_map(|t| match t {
+        enums::PhotoSize::Size(s) => Some(s.r#type.clone()),
+        _ => None,
+    })).ok_or("No downloadable thumb size found")?;
+
+    let location = types::InputDocumentFileLocation {
+        id: doc.id,
+        access_hash: doc.access_hash,
+        file_reference: doc.file_reference.clone(),
+        thumb_size: best_type,
+    };
+
+    let mut iter = DownloadIter::new_from_location(client, location.into());
+    let mut bytes = Vec::new();
+    while let Ok(Some(chunk)) = iter.next().await {
+        bytes.extend_from_slice(&chunk);
+        if bytes.len() > 1024 * 1024 {
+            break; // safety limit for a thumbnail
+        }
+    }
+
+    if bytes.is_empty() {
+        return Err("Thumbnail download returned empty data".into());
+    }
+
+    Ok((bytes, "image/jpeg".to_string()))
 }
