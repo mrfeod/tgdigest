@@ -28,7 +28,6 @@ use rocket::http::Header;
 use rocket::response::{content, Response};
 use rocket::response::content::RawHtml;
 use rocket::response::status;
-use rocket::tokio::sync::Mutex;
 use rustc_hash::FxHasher;
 use simple_logger::SimpleLogger;
 use std::collections::HashMap;
@@ -59,8 +58,6 @@ struct App {
     cache: PostCache,
     html_renderer: HtmlRenderer,
     card_renderer: CardRenderer,
-    render_queue:
-        Mutex<HashMap<String, Option<std::result::Result<PathBuf, status::Custom<String>>>>>,
     fetch_progress: std::sync::Mutex<HashMap<String, Arc<FetchProgress>>>,
 }
 
@@ -88,7 +85,6 @@ impl App {
             cache,
             html_renderer,
             card_renderer,
-            render_queue: Mutex::new(HashMap::new()),
             fetch_progress: std::sync::Mutex::new(HashMap::new()),
         })
     }
@@ -793,28 +789,8 @@ async fn video(
         return http_status_err(Status::BadRequest, "Provided date is not allowed");
     }
 
-    let mut queue = app.render_queue.lock().await;
-    let render_result = match queue.get(&task.task_id) {
-        Some(option) => match option {
-            Some(result) => result.clone(),
-            None => {
-                log::trace!("Task is in progress");
-                return http_status_err(Status::Accepted, "Task is in progress, try again later");
-            }
-        },
-        None => Ok(app.ctx.output_dir.join(format!("{}.mp4", task.task_id))),
-    };
-    // Can remove unconditionaly - it's already done or not started yet
-    queue.remove(&task.task_id);
-
-    let file = match render_result {
-        Ok(file) => file,
-        Err(e) => {
-            log::error!("Rendering task failed: {}", e.1);
-            return Err(e);
-        }
-    };
-
+    // Return cached video if available
+    let file = app.ctx.output_dir.join(format!("{}.mp4", task.task_id));
     if file.exists() {
         log::trace!("Used cache: {}", file.to_str().unwrap_or("unknown"));
         match NamedFile::open(file).await {
@@ -860,28 +836,12 @@ async fn video(
         rendered_html.len()
     );
 
-    queue.insert(task.task_id.clone(), None);
-    drop(queue);
+    let file = render_video(&task, &rendered_html, app.inner()).await?;
 
-    let app_clone = Arc::clone(app.inner());
-    tokio::spawn(async move {
-        let result = match render_video(&task, &rendered_html, &app_clone).await {
-            Ok(file) => {
-                log::info!("Rendered video: {}", file.to_str().unwrap_or("unknown"));
-                Ok(file)
-            }
-            Err(e) => {
-                log::error!("Failed to render video: {}", e.1);
-                Err(e)
-            }
-        };
-        app_clone
-            .render_queue
-            .lock()
-            .await
-            .insert(task.task_id, Some(result));
-    });
-    http_status_err(Status::Accepted, "Try again later")
+    match NamedFile::open(file).await {
+        Ok(file) => Ok(file),
+        Err(e) => http_status_err(Status::InternalServerError, &e.to_string()),
+    }
 }
 
 async fn render_video(
