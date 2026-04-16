@@ -52,7 +52,6 @@ pub async fn fetch_posts(
         .max_date(task.to_date as i32)
         .limit(limit);
     let mut posts: Vec<Post> = Vec::new();
-    let mut seen_groups: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
     while let Some(message) = messages.next().await? {
         if cancelled.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
             log::info!("Fetch cancelled for {}, returning {} posts", task.channel_name, posts.len());
@@ -77,19 +76,7 @@ pub async fn fetch_posts(
             image: None,
             grouped_id,
         };
-        if let Some(gid) = grouped_id {
-            // For album posts, keep only the one with the smallest id
-            if let Some(&idx) = seen_groups.get(&gid) {
-                if post.id < posts[idx].id {
-                    posts[idx] = post;
-                }
-            } else {
-                seen_groups.insert(gid, posts.len());
-                posts.push(post);
-            }
-        } else {
-            posts.push(post);
-        }
+        posts.push(post);
         if let Some(p) = progress {
             p.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
