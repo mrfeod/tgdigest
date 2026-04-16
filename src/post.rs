@@ -14,6 +14,8 @@ pub struct Post {
     pub reactions: Option<i32>,
     pub message: Option<String>,
     pub image: Option<i64>,
+    #[serde(skip_serializing)]
+    pub grouped_id: Option<i64>,
 }
 
 impl Post {
@@ -34,6 +36,7 @@ impl Post {
                 break;
             }
 
+            let grouped_id = message.grouped_id();
             posts.push(Post {
                 date,
                 id: message.id(),
@@ -43,6 +46,7 @@ impl Post {
                 reactions: message.reaction_count(),
                 message: Some(message.msg.message),
                 image: None,
+                grouped_id,
             });
         }
 

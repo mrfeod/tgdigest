@@ -42,6 +42,7 @@ impl PostCache {
                 message TEXT,
                 image INTEGER,
                 fetched_at INTEGER NOT NULL DEFAULT 0,
+                grouped_id INTEGER,
                 PRIMARY KEY (channel, id)
             );
             CREATE TABLE IF NOT EXISTS media_cache (
@@ -62,7 +63,7 @@ impl PostCache {
 
         // Migrate: if the schema doesn't match (missing columns), recreate the posts table
         let schema_ok = conn
-            .prepare("SELECT id, date, views, forwards, replies, reactions, message, image, fetched_at FROM posts LIMIT 0")
+            .prepare("SELECT id, date, views, forwards, replies, reactions, message, image, fetched_at, grouped_id FROM posts LIMIT 0")
             .is_ok();
         if !schema_ok {
             log::info!("Posts table schema mismatch — recreating");
@@ -79,6 +80,7 @@ impl PostCache {
                     message TEXT,
                     image INTEGER,
                     fetched_at INTEGER NOT NULL DEFAULT 0,
+                    grouped_id INTEGER,
                     PRIMARY KEY (channel, id)
                 );",
             )?;
@@ -141,13 +143,14 @@ impl PostCache {
         }
 
         let mut stmt = conn.prepare(
-            "SELECT id, date, views, forwards, replies, reactions, message, image, fetched_at
+            "SELECT id, date, views, forwards, replies, reactions, message, image, fetched_at, grouped_id
              FROM posts WHERE channel = ?1 AND date >= ?2 AND date <= ?3
-             ORDER BY date ASC",
+             ORDER BY date ASC, id ASC",
         )?;
 
         let mut fresh_posts = Vec::new();
         let mut stale_dates: Vec<i64> = Vec::new();
+        let mut seen_groups: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
         let rows = stmt.query_map(params![channel, from_date, to_date], |row| {
             Ok((
@@ -160,6 +163,7 @@ impl PostCache {
                     reactions: row.get(5)?,
                     message: row.get(6)?,
                     image: row.get(7)?,
+                    grouped_id: row.get(9)?,
                 },
                 row.get::<_, i64>(8)?, // fetched_at
             ))
@@ -170,6 +174,12 @@ impl PostCache {
 
         for row in rows {
             let (post, fetched_at) = row?;
+            // Deduplicate album posts: keep only the smallest id per grouped_id
+            if let Some(gid) = post.grouped_id {
+                if !seen_groups.insert(gid) {
+                    continue; // already seen this group, skip (ORDER BY id ASC ensures smallest first)
+                }
+            }
             all_min_date = all_min_date.min(post.date);
             all_max_date = all_max_date.max(post.date);
             let ttl = post_ttl(post.date, now);
@@ -253,9 +263,9 @@ impl PostCache {
 
         for post in posts {
             tx.execute(
-                "INSERT OR REPLACE INTO posts (channel, id, date, views, forwards, replies, reactions, message, image, fetched_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![channel, post.id, post.date, post.views, post.forwards, post.replies, post.reactions, post.message, post.image, now],
+                "INSERT OR REPLACE INTO posts (channel, id, date, views, forwards, replies, reactions, message, image, fetched_at, grouped_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![channel, post.id, post.date, post.views, post.forwards, post.replies, post.reactions, post.message, post.image, now, post.grouped_id],
             )?;
         }
 
