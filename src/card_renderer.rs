@@ -74,10 +74,23 @@ impl CardRenderer {
     }
 
     pub async fn render_html(&self, output_dir: &Path, html: &str) -> Result<()> {
-        let page = self.browser.new_page("about:blank").await?;
+        // Navigate to the server so the page has the right origin for iframe loading
+        let port = std::env::var("ROCKET_PORT").unwrap_or_else(|_| "8000".to_string());
+        let page = self.browser.new_page(format!("http://127.0.0.1:{}", port)).await?;
         page.set_content(html).await?;
         page.wait_for_navigation().await?;
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        // Wait for window.__READY flag set by render templates (up to 30s)
+        let wait_js = r#"
+            new Promise((resolve) => {
+                if (window.__READY) { resolve(); return; }
+                const check = setInterval(() => {
+                    if (window.__READY) { clearInterval(check); resolve(); }
+                }, 100);
+                setTimeout(() => { clearInterval(check); resolve(); }, 30000);
+            })
+        "#;
+        let _ = page.evaluate(wait_js).await;
 
         self.render_page(output_dir, page).await
     }

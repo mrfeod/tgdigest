@@ -60,6 +60,14 @@
                 }
             }
         });
+            (function () {
+                var iframes = document.querySelectorAll('iframe');
+                if (!iframes.length) { window.__READY = true; return; }
+                var loaded = 0;
+                iframes.forEach(function (f) {
+                    f.addEventListener('load', function () { if (++loaded >= iframes.length) window.__READY = true; });
+                });
+            })();
     </script>
 </body>
 

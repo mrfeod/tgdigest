@@ -48,6 +48,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libx11-xcb1 \
         libgbm1 \
         fonts-dejavu-core \
+        fonts-noto-color-emoji \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
 
