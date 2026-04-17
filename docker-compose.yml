@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: tgdigest:local
+    image: ${TGDIGEST_IMAGE:-tgdigest:local}
     ports:
       - "8000:8000"
     command: ["-c", "/app/config/config.json"]

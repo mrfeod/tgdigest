@@ -11,7 +11,6 @@ pub struct DigestData {
     pub editor_choice_id: i32,
     pub channel_name: String,
     pub channel_title: String,
-    pub userpic_url: String,
 }
 
 impl DigestData {
@@ -21,7 +20,6 @@ impl DigestData {
         context.insert("editor_choice_id", &self.editor_choice_id);
         context.insert("channel_name", &self.channel_name);
         context.insert("channel_title", &self.channel_title);
-        context.insert("userpic_url", &self.userpic_url);
         context
     }
 
@@ -42,7 +40,6 @@ impl DigestData {
             "editor_choice_id": self.editor_choice_id,
             "channel_name": self.channel_name,
             "channel_title": self.channel_title,
-            "userpic_url": self.userpic_url,
         })
     }
 }
@@ -85,6 +82,5 @@ pub fn create_digest_data(post_top: TopPost, task: Task, channel_title: &str) ->
         editor_choice_id: task.editor_choice_post_id,
         channel_name: task.channel_name.clone(),
         channel_title: channel_title.to_string(),
-        userpic_url: format!("/userpic/{}", &task.channel_name),
     })
 }

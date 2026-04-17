@@ -295,39 +295,6 @@ async fn index(
     return digest("ithueti", "ithueti", None, None, None, None, None, None, app).await;
 }
 
-#[get("/pic/<channel>")]
-async fn image(
-    channel: &str,
-    app: &rocket::State<Arc<App>>,
-) -> std::result::Result<NamedFile, status::Custom<String>> {
-    let task = Task {
-        channel_name: channel.to_string(),
-        command: Commands::Digest {},
-        ..Task::default()
-    };
-    log::debug!("Working on task: {}", task.to_string().unwrap());
-
-    let file = app
-        .ctx
-        .output_dir
-        .join(format!("{}.png", task.channel_name));
-    if file.exists() {
-        return NamedFile::open(file)
-            .await
-            .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_str()));
-    }
-
-    let tg_task = task.clone();
-    let client = tg::TelegramAPI::client();
-    let file = workers::tg::download_pic(client, tg_task, &app.ctx)
-        .await
-        .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
-
-    NamedFile::open(file)
-        .await
-        .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))
-}
-
 #[get("/digest/<mode>/<channel>/<year>/<month>/<week>?<top_count>&<editor_choice>&<force>")]
 async fn digest_by_week(
     mode: &str,
@@ -470,7 +437,6 @@ async fn digest(
         let mut context = tera::Context::new();
         context.insert("channel_name", &task.channel_name);
         context.insert("channel_title", &channel_title);
-        context.insert("userpic_url", &format!("/userpic/{}", &task.channel_name));
         context.insert("data_url", &data_url);
 
         let digest = app.html_renderer.render(&template_name, &context)
@@ -514,38 +480,6 @@ async fn digest(
             .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
         log::trace!("Digest html rendered (static): length={}", digest.len());
         Ok(content::RawHtml(digest))
-    }
-}
-
-#[get("/progress/<task_id>")]
-fn fetch_progress_endpoint(
-    task_id: &str,
-    app: &rocket::State<Arc<App>>,
-) -> rocket::serde::json::Json<serde_json::Value> {
-    let map = app.fetch_progress.lock().unwrap();
-    if let Some(progress) = map.get(task_id) {
-        progress.last_poll.store(now_secs(), Ordering::Relaxed);
-    }
-    match map.get(task_id) {
-        Some(progress) => {
-            let fetched = progress.fetched.load(Ordering::Relaxed);
-            let done = progress.done.load(Ordering::Relaxed);
-            let error = progress.error.lock().unwrap().clone();
-            rocket::serde::json::Json(serde_json::json!({
-                "fetched": fetched,
-                "limit": progress.limit,
-                "done": done,
-                "error": error,
-            }))
-        }
-        None => {
-            rocket::serde::json::Json(serde_json::json!({
-                "fetched": 0,
-                "limit": 0,
-                "done": true,
-                "error": null,
-            }))
-        }
     }
 }
 
@@ -823,8 +757,6 @@ async fn video(
     let render_context = workers::cards::create_context(post_top, task.clone())
         .map_err(|e| http_status(Status::BadRequest, e.to_string().as_ref()))?;
 
-    image(&task.channel_name, app).await?;
-
     let rendered_html = app
         .html_renderer
         .render(
@@ -971,7 +903,6 @@ async fn view_post(
     ctx.insert("has_leading_media", &has_leading_media);
     ctx.insert("channel_name", channel);
     ctx.insert("channel_title", &post.channel_title);
-    ctx.insert("userpic_url", &format!("/userpic/{}", channel));
     ctx.insert("post_id", &post.id);
     ctx.insert("post_date", &DateTime::<Utc>::from_timestamp(post.date, 0)
         .map(|dt| dt.format("%d/%m/%Y %H:%M").to_string())
@@ -1508,8 +1439,6 @@ async fn main() {
             routes![
                 favicon,
                 index,
-                image,
-                fetch_progress_endpoint,
                 data_endpoint,
                 digest_by_week,
                 digest_by_month,
