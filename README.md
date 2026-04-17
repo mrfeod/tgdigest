@@ -12,19 +12,9 @@ As additional artifact the tool can create top/digest page: https://ithueti.club
 # Build and Run
 ```sh
 cargo build
-```
-
-You need to specify the configuration file as an argument and if this is your first run and there is no valid `tgdigest.session`, you have to log in.
-```sh
 cargo run -- -c config.json
 ```
-
-After server start, basic API calls:
-```text
-http://127.0.0.1:8000/digest/example/ithueti/2026/3
-http://127.0.0.1:8000/video/example/ithueti/2026/3?views=1
-http://127.0.0.1:8000/view/ithueti/2026
-```
+If this is your first run and there is no valid `tgdigest.session`, you have to log in with your Telegram account.
 
 `config.json`: file example:
 ```json
@@ -38,8 +28,13 @@ http://127.0.0.1:8000/view/ithueti/2026
 }
 ```
 
+- `tg_*`: create your Telegram App credentials https://my.telegram.org/apps.
 - `proxy_url` (optional): SOCKS5 proxy for Telegram connection. Supports `socks5://host:port` or `socks5://user:pass@host:port`. Omit the field to connect directly.
 
+After server start, basic API calls:
+- **Digest:** http://127.0.0.1:8000/digest/example/ithueti/2026/3
+- **Video:** http://127.0.0.1:8000/video/example/ithueti/2026/3?views=1
+- **View:** http://127.0.0.1:8000/view/ithueti/2026
 
 # Docker
 
@@ -50,8 +45,9 @@ docker compose up --build -d
 
 Or use prebuilt image from GHCR:
 ```sh
-docker pull ghcr.io/mrfeod/tgdigest:master
-TGDIGEST_IMAGE=ghcr.io/mrfeod/tgdigest:master docker compose up -d --no-build
+export TGDIGEST_IMAGE=ghcr.io/mrfeod/tgdigest:master
+docker pull $TGDIGEST_IMAGE
+docker compose up -d --no-build
 ```
 
 If this is your first run and there is no valid `tgdigest.session`, log in using interactive mode:
@@ -89,32 +85,51 @@ Example `docker-config.json`:
 
 # Server Endpoints
 
-- **GET `/userpic/<channel>`**
-  - Stream channel userpic.
+Parameters without specified data type are flags, i.e. `comments`, `dark`, `force`, etc.
+Example: ?dark` → `dark=true`
 
-- **GET `/digest/<mode>/<channel>`**
+Ranking params belong to the range `[1, top_count]`.
+Example: ?views=1` → use the best by views.
+
+Timestamps (`utc_ts_sec`) are Unix timestamps in seconds (UTC).
+
+Path param `mode`: directory name inside [`./data`](./data)
+Example: /digest/example/ithueti` → uses templates from `./data/example`.
+
+- **GET `/userpic/<channel>`** → `image/png`
+  - Stream channel userpic.
+  - Example: https://localhost:8000/userpic/ithueti
+
+- **GET `/digest/<mode>/<channel>`** → `text/html`
 - **GET `/digest/<mode>/<channel>/<year>`**
 - **GET `/digest/<mode>/<channel>/<year>/<month>`**
 - **GET `/digest/<mode>/<channel>/<year>/<month>/<week>`**
   - Render digest HTML page.
-  - Query params (optional): `top_count`, `editor_choice`, `force`, `force_limit`
-        - Only for `/<mode>/<channel>`: `from_date`, `to_date`
+  - Query params (optional): `top_count=<int>`, `editor_choice=<int:post_id>`, `force_limit=<int>`, `force`
+  - Only for `/<mode>/<channel>`: `from_date=<utc_ts_sec>`, `to_date=<utc_ts_sec>`
+  - Example: https://localhost:8000/digest/example/ithueti?top_count=10&editor_choice=2026
 
-- **GET `/video/<mode>/<channel>`**
+- **GET `/video/<mode>/<channel>`** → `video/mp4`
 - **GET `/video/<mode>/<channel>/<year>`**
 - **GET `/video/<mode>/<channel>/<year>/<month>`**
 - **GET `/video/<mode>/<channel>/<year>/<month>/<week>`**
   - Render and return `.mp4`.
-  - Query params (optional): `replies`, `reactions`, `forwards`, `views`, `top_count`, `editor_choice`, `force`
-        - Only for `/<mode>/<channel>`: `from_date`, `to_date`
+  - Query params (optional):
+    `top_count=<int>`, `replies=<int:[1, top_count]>`, `reactions=<int:[1, top_count]>`, `forwards=<int:[1, top_count]>`, `views=<int:[1, top_count]>`, `editor_choice=<int:post_id>`, `force`
+  - Only for `/<mode>/<channel>`: `from_date=<utc_ts_sec>`, `to_date=<utc_ts_sec>`
+  - Example: https://localhost:8000/video/example/ithueti?top_count=5&views=1&replies=1
 
-- **GET `/post/<channel>/<id>`**
+- **GET `/post/<channel>/<id>`** → `application/json`
   - Return post JSON.
+  - Example: https://localhost:8000/post/ithueti/2026`
 
-- **GET `/view/<channel>/<id>`**
+- **GET `/view/<channel>/<id>`** → `text/html`
   - Render single post view as HTML.
-  - Query params (optional): `views`, `forwards`, `reactions`, `comments`, `px_limit`, `dark`, `iframe`
+  - Query params (optional): `views`, `forwards`, `reactions`, `comments`, `dark`, `iframe`, `px_limit=<int>`
+  - Example: https://localhost:8000/view/ithueti/2026?dark&iframe&px_limit=900
 
-- **GET `/data/<mode>/<channel>`**
+- **GET `/data/<mode>/<channel>`** → `application/json`
   - Return digest data JSON for async templates.
-  - Query params (optional): `top_count`, `editor_choice`, `from_date`, `to_date`, `force`, `force_limit`, `task_id`.
+  - Query params (optional):
+    `top_count=<int>`, `editor_choice=<int:post_id>`, `from_date=<utc_ts_sec>`, `to_date=<utc_ts_sec>`, `force_limit=<int>`, `force`, `task_id=<int>`
+  - Example: https://localhost:8000/data/example/ithueti?top_count=10&from_date=1700000000&to_date=1705000000
