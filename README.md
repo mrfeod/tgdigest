@@ -105,7 +105,7 @@ Example: /digest/example/ithueti` → uses templates from `./data/example`.
 - **GET `/digest/<mode>/<channel>/<year>/<month>`**
 - **GET `/digest/<mode>/<channel>/<year>/<month>/<week>`**
   - Render digest HTML page.
-  - Query params (optional): `top_count=<int>`, `editor_choice=<int:post_id>`, `force_limit=<int>`, `force`
+  - Query params (optional): `top_count=<int>`, `editor_choice=<int:post_id>`, `force_limit`, `force`
   - Only for `/<mode>/<channel>`: `from_date=<utc_ts_sec>`, `to_date=<utc_ts_sec>`
   - Example: https://localhost:8000/digest/example/ithueti?top_count=10&editor_choice=2026
 
