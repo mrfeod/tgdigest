@@ -45,7 +45,7 @@ extern crate rocket;
 
 pub struct FetchProgress {
     pub fetched: AtomicUsize,
-    pub limit: usize,
+    pub limit: AtomicUsize,
     pub done: AtomicBool,
     pub cancelled: AtomicBool,
     pub last_poll: AtomicU64,
@@ -107,27 +107,39 @@ fn http_status_err<T>(status: Status, msg: &str) -> std::result::Result<T, statu
     Err(http_status(status, msg))
 }
 
-fn get_cached_top_posts(app: &App, task: &Task) -> std::result::Result<(TopPost, bool), Box<dyn std::error::Error>> {
-    let (mut fresh_posts, stale_ranges) = app.cache.get_posts_and_stale_ranges(
-        &task.channel_name, task.from_date, task.to_date,
+fn get_cached_top_posts(app: &App, task: &Task, fetch_target: Option<usize>, force: bool) -> std::result::Result<(TopPost, bool), Box<dyn std::error::Error>> {
+    let (mut posts, fetch_plan) = app.cache.get_posts_and_fetch_plan(
+        &task.channel_name, task.from_date, task.to_date, fetch_target, force,
     )?;
-    let is_loading = !stale_ranges.is_empty();
-    fresh_posts.sort_by_key(|p| p.id);
-    fresh_posts.dedup_by_key(|p| p.id);
-    Ok((TopPost::get_top(task.top_count, &mut fresh_posts), is_loading))
+    let is_loading = !fetch_plan.is_empty();
+    posts.sort_by_key(|p| p.id);
+    posts.dedup_by_key(|p| p.id);
+    Ok((TopPost::get_top(task.top_count, &mut posts), is_loading))
+}
+
+/// Compute how many additional posts to pull into the cache.
+///
+/// - Without `force_limit`: `min(top_count, 1000)` — capped at the default.
+/// - With `force_limit=true`: `top_count` as-is, no cap.
+fn compute_fetch_target(force_limit: bool, top_count: usize) -> Option<usize> {
+    if force_limit {
+        Some(top_count)
+    } else {
+        Some(top_count.min(cache::DEFAULT_FETCH_CAP))
+    }
 }
 
 fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
-fn start_background_fetch(app: &Arc<App>, task: &Task, force: bool, force_limit: bool) -> String {
-    let limit = if force_limit { 30000 } else { workers::tg::DEFAULT_FETCH_LIMIT };
-    let task_id = format!("{}:{}:{}:{}:{}", task.channel_name, task.from_date, task.to_date, force, limit);
+fn start_background_fetch(app: &Arc<App>, task: &Task, force: bool, fetch_target: Option<usize>) -> String {
+    let task_id = format!("{}:{}:{}:{}:{:?}", task.channel_name, task.from_date, task.to_date, force, fetch_target);
 
+    let estimated_limit = fetch_target.unwrap_or(cache::ALWAYS_REFRESH_HEAD);
     let progress = Arc::new(FetchProgress {
         fetched: AtomicUsize::new(0),
-        limit,
+        limit: AtomicUsize::new(estimated_limit),
         done: AtomicBool::new(false),
         cancelled: AtomicBool::new(false),
         last_poll: AtomicU64::new(now_secs()),
@@ -152,7 +164,7 @@ fn start_background_fetch(app: &Arc<App>, task: &Task, force: bool, force_limit:
     let tid = task_id.clone();
     let progress_clone = progress.clone();
     tokio::spawn(async move {
-        let result = background_fetch(&app, &task, limit, force, &progress).await;
+        let result = background_fetch(&app, &task, fetch_target, force, &progress).await;
         if let Err(e) = result {
             log::error!("Background fetch error for {}: {}", tid, e);
             *progress.error.lock().unwrap() = Some(e.to_string());
@@ -180,47 +192,75 @@ fn start_background_fetch(app: &Arc<App>, task: &Task, force: bool, force_limit:
 async fn background_fetch(
     app: &App,
     task: &Task,
-    limit: usize,
+    fetch_target: Option<usize>,
     force: bool,
     progress: &Arc<FetchProgress>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let client = tg::TelegramAPI::client();
 
-    if force {
-        let posts = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            workers::tg::fetch_posts(&client, task, limit, Some(&progress.fetched), Some(&progress.cancelled)),
-        ).await
-            .map_err(|_| -> Box<dyn std::error::Error> { "Telegram fetch timed out".into() })??;
-        let _ = app.cache.store_posts(&task.channel_name, &posts);
-        let _ = app.cache.touch_posts_in_range(&task.channel_name, task.from_date, task.to_date);
-        let _ = app.cache.update_fetch_bounds(&task.channel_name, task.from_date, task.to_date);
-        return Ok(());
-    }
-
-    let (_, stale_ranges) = app.cache.get_posts_and_stale_ranges(
-        &task.channel_name, task.from_date, task.to_date,
+    let (_, fetch_plan) = app.cache.get_posts_and_fetch_plan(
+        &task.channel_name, task.from_date, task.to_date, fetch_target, force,
     )?;
 
-    for (from, to) in &stale_ranges {
+    // Update progress limit to the actual total
+    progress.limit.store(fetch_plan.total_limit(), Ordering::Relaxed);
+
+    for (from, to, range_limit) in &fetch_plan.ranges {
         if progress.cancelled.load(Ordering::Relaxed) {
             log::info!("Fetch cancelled between ranges for {}", task.channel_name);
             break;
         }
-        log::debug!("Background fetching range [{} .. {}] for {}", from, to, task.channel_name);
-        let sub_task = Task {
-            from_date: *from,
-            to_date: *to,
-            ..task.clone()
-        };
-        let fetched = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            workers::tg::fetch_posts(&client, &sub_task, limit, Some(&progress.fetched), Some(&progress.cancelled)),
-        ).await
-            .map_err(|_| -> Box<dyn std::error::Error> { "Telegram fetch timed out".into() })??;
-        let _ = app.cache.store_posts(&task.channel_name, &fetched);
-        let _ = app.cache.touch_posts_in_range(&task.channel_name, *from, *to);
-        let _ = app.cache.update_fetch_bounds(&task.channel_name, *from, *to);
+
+        let mut remaining = *range_limit;
+        let mut current_to = *to;
+
+        // Loop to handle limits > MAX_FETCH_PER_REQUEST (30000)
+        while remaining > 0 && current_to > *from {
+            if progress.cancelled.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let batch_limit = remaining.min(cache::MAX_FETCH_PER_REQUEST);
+            log::debug!(
+                "Background fetching [{} .. {}] limit {} for {}",
+                from, current_to, batch_limit, task.channel_name
+            );
+
+            let sub_task = Task {
+                from_date: *from,
+                to_date: current_to,
+                ..task.clone()
+            };
+
+            let fetched = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                workers::tg::fetch_posts(
+                    &client, &sub_task, batch_limit,
+                    Some(&progress.fetched), Some(&progress.cancelled),
+                ),
+            ).await
+                .map_err(|_| -> Box<dyn std::error::Error> { "Telegram fetch timed out".into() })??;
+
+            let fetched_count = fetched.len();
+            let oldest_fetched_date = fetched.iter().map(|p| p.date).min();
+
+            let _ = app.cache.store_posts(&task.channel_name, &fetched);
+            let _ = app.cache.touch_posts_in_range(&task.channel_name, *from, current_to);
+            let _ = app.cache.update_fetch_bounds(&task.channel_name, *from, current_to);
+
+            remaining = remaining.saturating_sub(fetched_count);
+
+            // If we got fewer posts than the batch limit, the range is exhausted
+            if fetched_count < batch_limit {
+                break;
+            }
+
+            // Move to_date to just before the oldest fetched post for the next batch
+            match oldest_fetched_date {
+                Some(oldest) if oldest > *from => current_to = oldest,
+                _ => break,
+            }
+        }
     }
 
     Ok(())
@@ -411,6 +451,7 @@ async fn digest(
 
     let force = force.unwrap_or(false);
     let force_limit = force_limit.unwrap_or(false);
+    let fetch_target = compute_fetch_target(force_limit, task.top_count);
 
     // Detect async template: if template source contains "data_url", it fetches data via JS
     let template_name = format!("{}/digest_template.html", task.mode);
@@ -444,11 +485,11 @@ async fn digest(
         Ok(content::RawHtml(digest))
     } else {
         // Static template — block until data is ready
-        let (_, is_stale) = get_cached_top_posts(&app, &task)
+        let (_, is_stale) = get_cached_top_posts(&app, &task, fetch_target, force)
             .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
         if is_stale || force {
-            let task_id = start_background_fetch(app.inner(), &task, force, force_limit);
+            let task_id = start_background_fetch(app.inner(), &task, force, fetch_target);
             // Wait for fetch completion, keeping watchdog alive
             loop {
                 {
@@ -464,7 +505,7 @@ async fn digest(
             }
         }
 
-        let (post_top, _) = get_cached_top_posts(&app, &task)
+        let (post_top, _) = get_cached_top_posts(&app, &task, None, false)
             .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
         let client = tg::TelegramAPI::client();
@@ -514,18 +555,41 @@ async fn data_endpoint(
 
     // 1. If task_id provided, check its progress
     if let Some(ref tid) = task_id {
-        let map = app.fetch_progress.lock().unwrap();
-        if let Some(progress) = map.get(tid.as_str()) {
-            progress.last_poll.store(now_secs(), Ordering::Relaxed);
-            if !progress.done.load(Ordering::Relaxed) {
-                return Ok(Json(serde_json::json!({
-                    "status": "loading",
-                    "task_id": tid,
-                    "fetched": progress.fetched.load(Ordering::Relaxed),
-                    "limit": progress.limit,
-                })));
+        // Extract progress state under the lock, then drop it before any .await
+        let progress_state = {
+            let map = app.fetch_progress.lock().unwrap();
+            map.get(tid.as_str()).map(|p| {
+                p.last_poll.store(now_secs(), Ordering::Relaxed);
+                let done = p.done.load(Ordering::Relaxed);
+                let fetched = p.fetched.load(Ordering::Relaxed);
+                let limit = p.limit.load(Ordering::Relaxed);
+                let error = if done { p.error.lock().unwrap().clone() } else { None };
+                (done, fetched, limit, error)
+            })
+        };
+
+        if let Some((done, fetched, limit, error)) = progress_state {
+            if !done {
+                // Return progress + current cached data so the frontend can render incrementally
+                let (post_top, _) = get_cached_top_posts(&app, &task, None, false)
+                    .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+
+                let client = tg::TelegramAPI::client();
+                let channel_title = workers::tg::get_channel_title(&client, &task.channel_name)
+                    .await
+                    .unwrap_or_else(|_| task.channel_name.clone());
+
+                let data = workers::digest::create_digest_data(post_top, task.clone(), &channel_title)
+                    .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+
+                let mut json = data.to_json();
+                json["status"] = serde_json::json!("loading");
+                json["task_id"] = serde_json::json!(tid);
+                json["fetched"] = serde_json::json!(fetched);
+                json["limit"] = serde_json::json!(limit);
+
+                return Ok(Json(json));
             }
-            let error = progress.error.lock().unwrap().clone();
             if let Some(err) = error {
                 return Ok(Json(serde_json::json!({"status": "error", "error": err})));
             }
@@ -534,25 +598,42 @@ async fn data_endpoint(
     }
 
     // 2. Check cache
-    let (_, is_stale) = get_cached_top_posts(&app, &task)
+    let force = force.unwrap_or(false);
+    let force_limit = force_limit.unwrap_or(false);
+    let fetch_target = compute_fetch_target(force_limit, task.top_count);
+
+    let (_, is_stale) = get_cached_top_posts(&app, &task, fetch_target, force)
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
-    let force = force.unwrap_or(false);
     let need_fetch = is_stale || force;
 
     if need_fetch && task_id.is_none() {
-        let tid = start_background_fetch(app.inner(), &task, force, force_limit.unwrap_or(false));
-        let limit = if force_limit.unwrap_or(false) { 30000 } else { workers::tg::DEFAULT_FETCH_LIMIT };
-        return Ok(Json(serde_json::json!({
-            "status": "loading",
-            "task_id": tid,
-            "fetched": 0,
-            "limit": limit,
-        })));
+        let tid = start_background_fetch(app.inner(), &task, force, fetch_target);
+        let estimated_limit = fetch_target.unwrap_or(cache::ALWAYS_REFRESH_HEAD);
+
+        // Return initial cached data along with loading status
+        let (post_top, _) = get_cached_top_posts(&app, &task, None, false)
+            .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+
+        let client = tg::TelegramAPI::client();
+        let channel_title = workers::tg::get_channel_title(&client, &task.channel_name)
+            .await
+            .unwrap_or_else(|_| task.channel_name.clone());
+
+        let data = workers::digest::create_digest_data(post_top, task.clone(), &channel_title)
+            .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+
+        let mut json = data.to_json();
+        json["status"] = serde_json::json!("loading");
+        json["task_id"] = serde_json::json!(tid);
+        json["fetched"] = serde_json::json!(0);
+        json["limit"] = serde_json::json!(estimated_limit);
+
+        return Ok(Json(json));
     }
 
     // 3. Return data
-    let (post_top, _) = get_cached_top_posts(&app, &task)
+    let (post_top, _) = get_cached_top_posts(&app, &task, None, false)
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
     let client = tg::TelegramAPI::client();
@@ -741,7 +822,7 @@ async fn video(
     let force = force.unwrap_or(false);
 
     // Video needs all data — start fetch and wait for it
-    let fetch_task_id = start_background_fetch(app.inner(), &tg_task, force, false);
+    let fetch_task_id = start_background_fetch(app.inner(), &tg_task, force, None);
     loop {
         let is_running = {
             let map = app.fetch_progress.lock().unwrap();
@@ -751,7 +832,7 @@ async fn video(
         if !is_running { break; }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
-    let (post_top, _) = get_cached_top_posts(&app, &tg_task)
+    let (post_top, _) = get_cached_top_posts(&app, &tg_task, None, false)
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
     let render_context = workers::cards::create_context(post_top, task.clone())

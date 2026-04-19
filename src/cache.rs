@@ -1,3 +1,31 @@
+//! # Post Cache Logic
+//!
+//! Fetching rules form a hierarchy — each level extends the previous one:
+//!
+//! 1. **Newest 200 posts** in the requested range are always re-fetched
+//!    (debounce: at most once per minute). This keeps the "head" of the
+//!    channel accurate — views, reactions, etc. change quickly on
+//!    recent posts.
+//!
+//! 2. **`top_count`** (capped at 1 000 by default) determines how many
+//!    *additional* posts to pull into the cache beyond the 200 head.
+//!    Each successive request resumes from the oldest cached post,
+//!    progressively walking back in history.
+//!
+//! 3. **`force_limit=true`** removes the 1 000 cap — `top_count` is used
+//!    as-is (e.g. `top_count=10000`). If the resulting number exceeds
+//!    30 000 (the per-request limit of grammers `iter_messages`),
+//!    multiple Telegram calls are made automatically.
+//!
+//! 4. **`force=true`** ignores the cache entirely: every post in the
+//!    requested range is re-fetched from scratch and the cache is
+//!    overwritten.
+//!
+//! Additionally, **posts from the last 7 days** whose `fetched_at` is
+//! older than 24 hours are re-fetched (TTL = 1 day). Posts older than
+//! 7 days are considered permanently fresh and are never re-fetched
+//! unless `force=true`.
+
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 
@@ -5,19 +33,36 @@ use crate::post::Post;
 use crate::util::Result;
 
 const DAY: i64 = 86400;
-const MONTH: i64 = 30 * DAY;
+const WEEK: i64 = 7 * DAY;
+
+/// Maximum number of posts per single grammers `iter_messages` call.
+pub const MAX_FETCH_PER_REQUEST: usize = 30_000;
+
+/// The newest N posts in a requested range are always re-fetched.
+pub const ALWAYS_REFRESH_HEAD: usize = 200;
+
+/// Default cap on progressive fetch when `force_limit` is off.
+pub const DEFAULT_FETCH_CAP: usize = 1_000;
 
 const MAX_CACHED_MEDIA_SIZE: i64 = 10 * 1024 * 1024; // 10 MB
 
-/// Returns the cache TTL for a post based on its age.
-/// - Older than 1 month: None (never refresh)
-/// - Less than 1 month: 1 day
-fn post_ttl(post_date: i64, now: i64) -> Option<i64> {
-    let age = now - post_date;
-    if age > MONTH {
-        None // never refresh
-    } else {
-        Some(DAY)
+/// Describes what needs to be fetched from Telegram.
+/// Each entry is `(from_date, to_date, limit)`.
+pub struct FetchPlan {
+    pub ranges: Vec<(i64, i64, usize)>,
+}
+
+impl FetchPlan {
+    fn new(ranges: Vec<(i64, i64, usize)>) -> Self {
+        Self { ranges }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+
+    pub fn total_limit(&self) -> usize {
+        self.ranges.iter().map(|r| r.2).sum()
     }
 }
 
@@ -101,60 +146,40 @@ impl PostCache {
 
     // ── Post cache ─────────────────────────────────────────────────────
 
-    /// Returns (fresh_posts, stale_ranges).
-    /// Fresh posts are returned directly; stale_ranges are date intervals that
-    /// need re-fetching from Telegram.
-    pub fn get_posts_and_stale_ranges(
+    /// Returns all cached posts in the range (always returned, even if a
+    /// re-fetch is also needed) and a `FetchPlan` describing what must be
+    /// fetched from Telegram.
+    pub fn get_posts_and_fetch_plan(
         &self,
         channel: &str,
         from_date: i64,
         to_date: i64,
-    ) -> Result<(Vec<Post>, Vec<(i64, i64)>)> {
+        force_limit: Option<usize>,
+        force: bool,
+    ) -> Result<(Vec<Post>, FetchPlan)> {
+        // ── force mode: ignore cache, re-fetch everything ──────────
+        if force {
+            let limit = force_limit.unwrap_or(MAX_FETCH_PER_REQUEST);
+            return Ok((vec![], FetchPlan::new(vec![(from_date, to_date, limit)])));
+        }
+
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
         let now = chrono::Utc::now().timestamp();
 
-        // Check if we have ANY cached posts for this range
-        let cached_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM posts WHERE channel = ?1 AND date >= ?2 AND date <= ?3",
-            params![channel, from_date, to_date],
-            |row| row.get(0),
-        )?;
-
-        if cached_count == 0 {
-            // No cached posts — check if we've previously fetched this range
-            let fetch_bounds: Option<(i64, i64)> = conn.query_row(
-                "SELECT min_fetched_date, max_fetched_date FROM channel_fetch_bounds WHERE channel = ?1",
-                params![channel],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            ).ok();
-
-            let uncovered = match fetch_bounds {
-                Some((min_fetched, max_fetched)) => {
-                    let mut ranges = Vec::new();
-                    if from_date < min_fetched {
-                        ranges.push((from_date, min_fetched));
-                    }
-                    if to_date > max_fetched {
-                        ranges.push((max_fetched, to_date));
-                    }
-                    ranges
-                }
-                None => vec![(from_date, to_date)],
-            };
-
-            log::debug!("Cache miss for {} [{} .. {}]: {} uncovered ranges", channel, from_date, to_date, uncovered.len());
-            return Ok((vec![], uncovered));
-        }
-
+        // Load all cached posts in the range (date ASC, id ASC)
         let mut stmt = conn.prepare(
             "SELECT id, date, views, forwards, replies, reactions, message, image, fetched_at, grouped_id
              FROM posts WHERE channel = ?1 AND date >= ?2 AND date <= ?3
              ORDER BY date ASC, id ASC",
         )?;
 
-        let mut fresh_posts = Vec::new();
-        let mut stale_dates: Vec<i64> = Vec::new();
+        let mut all_posts: Vec<(Post, i64)> = Vec::new();
         let mut seen_groups: std::collections::HashSet<i64> = std::collections::HashSet::new();
+
+        // Track which posts need refresh (newest 1000 + stale weekly)
+        let mut needs_head_refresh = false;
+        let mut needs_weekly_refresh = false;
+        let mut weekly_stale_min_date = i64::MAX;
 
         let rows = stmt.query_map(params![channel, from_date, to_date], |row| {
             Ok((
@@ -173,90 +198,121 @@ impl PostCache {
             ))
         })?;
 
-        let mut all_min_date = i64::MAX;
-        let mut all_max_date = i64::MIN;
-
         for row in rows {
             let (post, fetched_at) = row?;
-            // Deduplicate album posts: keep only the smallest id per grouped_id
             if let Some(gid) = post.grouped_id {
                 if !seen_groups.insert(gid) {
-                    continue; // already seen this group, skip (ORDER BY id ASC ensures smallest first)
+                    continue;
                 }
             }
-            all_min_date = all_min_date.min(post.date);
-            all_max_date = all_max_date.max(post.date);
-            let ttl = post_ttl(post.date, now);
-            let is_fresh = match ttl {
-                None => true, // never expires
-                Some(ttl) => (now - fetched_at) < ttl,
-            };
-            if is_fresh {
-                fresh_posts.push(post);
-            } else {
-                stale_dates.push(post.date);
+
+            // Check weekly staleness: posts < 7 days old with fetched_at > 1 day ago
+            let age = now - post.date;
+            if age < WEEK && (now - fetched_at) >= DAY {
+                needs_weekly_refresh = true;
+                weekly_stale_min_date = weekly_stale_min_date.min(post.date);
+            }
+
+            all_posts.push((post, fetched_at));
+        }
+
+        let cached_count = all_posts.len();
+
+        // The newest 200 posts are always refreshed, but at most once per minute.
+        if cached_count > 0 {
+            let head_start = cached_count.saturating_sub(ALWAYS_REFRESH_HEAD);
+            let oldest_head_fetch = all_posts[head_start..]
+                .iter()
+                .map(|(_, fa)| *fa)
+                .min()
+                .unwrap_or(0);
+            if (now - oldest_head_fetch) >= 60 {
+                needs_head_refresh = true;
             }
         }
 
-        // Build contiguous stale ranges from stale post dates
-        let mut stale_ranges = if stale_dates.is_empty() {
-            vec![]
-        } else {
-            Self::build_stale_ranges(&stale_dates, from_date, to_date)
-        };
+        let all_posts: Vec<Post> = all_posts.into_iter().map(|(p, _)| p).collect();
 
-        // Check for uncovered edges beyond what we've previously fetched
-        let fetch_bounds: Option<(i64, i64)> = conn.query_row(
-            "SELECT min_fetched_date, max_fetched_date FROM channel_fetch_bounds WHERE channel = ?1",
-            params![channel],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).ok();
+        // ── Build the fetch plan ───────────────────────────────────
+        let mut ranges: Vec<(i64, i64, usize)> = Vec::new();
 
-        match fetch_bounds {
-            Some((min_fetched, max_fetched)) => {
-                if from_date < min_fetched {
-                    stale_ranges.push((from_date, min_fetched));
-                }
-                if to_date > max_fetched {
-                    stale_ranges.push((max_fetched, to_date));
+        // 1. Head refresh: newest 200 posts — fetch from to_date with limit 200
+        if needs_head_refresh || cached_count == 0 {
+            let head_limit = if cached_count == 0 {
+                // Nothing cached yet — do an initial fetch
+                force_limit.unwrap_or(ALWAYS_REFRESH_HEAD)
+            } else {
+                ALWAYS_REFRESH_HEAD
+            };
+            ranges.push((from_date, to_date, head_limit));
+        }
+
+        // 2. Weekly refresh: posts < 7 days old that are stale
+        if needs_weekly_refresh {
+            let weekly_from = (now - WEEK).max(from_date);
+            // Avoid duplicate range if head refresh already covers this
+            let dominated_by_head = needs_head_refresh && weekly_from >= from_date;
+            if !dominated_by_head || weekly_stale_min_date < (now - WEEK).max(from_date) {
+                // Only add a separate weekly range if it's different from head range
+                let already_covered = ranges.iter().any(|&(f, t, _)| f <= weekly_from && t >= to_date);
+                if !already_covered {
+                    ranges.push((weekly_from, to_date, MAX_FETCH_PER_REQUEST));
                 }
             }
-            None => {
-                // No fetch bounds recorded yet — use cached post dates as estimate
-                if from_date < all_min_date {
-                    stale_ranges.push((from_date, all_min_date));
+        }
+
+        // 3. Progressive fetch (force_limit): fetch N more posts below the oldest cached post
+        if let Some(limit) = force_limit {
+            if cached_count > 0 {
+                let oldest_cached_date: i64 = conn.query_row(
+                    "SELECT MIN(date) FROM posts WHERE channel = ?1 AND date >= ?2 AND date <= ?3",
+                    params![channel, from_date, to_date],
+                    |row| row.get(0),
+                )?;
+                // Fetch from [from_date .. oldest_cached_date] to walk backward
+                if oldest_cached_date > from_date {
+                    ranges.push((from_date, oldest_cached_date, limit));
                 }
-                if to_date > all_max_date {
-                    stale_ranges.push((all_max_date, to_date));
+            }
+            // If cached_count == 0, the head_limit above already uses force_limit
+        }
+
+        // 4. Check for uncovered edges beyond what we've previously fetched
+        if ranges.is_empty() || force_limit.is_some() {
+            let fetch_bounds: Option<(i64, i64)> = conn.query_row(
+                "SELECT min_fetched_date, max_fetched_date FROM channel_fetch_bounds WHERE channel = ?1",
+                params![channel],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).ok();
+
+            if let Some((min_fetched, max_fetched)) = fetch_bounds {
+                let edge_limit = force_limit.unwrap_or(ALWAYS_REFRESH_HEAD);
+                if from_date < min_fetched {
+                    ranges.push((from_date, min_fetched, edge_limit));
+                }
+                if to_date > max_fetched {
+                    ranges.push((max_fetched, to_date, edge_limit));
                 }
             }
         }
 
         log::debug!(
-            "Cache for {} [{} .. {}]: {} fresh, {} stale ranges",
-            channel, from_date, to_date,
-            fresh_posts.len(), stale_ranges.len()
+            "Cache for {} [{} .. {}]: {} cached posts, {} fetch ranges",
+            channel, from_date, to_date, cached_count, ranges.len()
         );
 
-        Ok((fresh_posts, stale_ranges))
+        Ok((all_posts, FetchPlan::new(ranges)))
     }
 
-    /// Build stale range: all stale posts are within the last month,
-    /// so we return a single range covering from the boundary to to_date.
-    fn build_stale_ranges(stale_dates: &[i64], from_date: i64, to_date: i64) -> Vec<(i64, i64)> {
-        if stale_dates.is_empty() {
-            return vec![];
-        }
-
-        let now = chrono::Utc::now().timestamp();
-        let boundary_1m = now - MONTH;
-
-        // Only posts younger than 1 month can be stale
-        if stale_dates.iter().any(|&d| d > boundary_1m) {
-            vec![(boundary_1m.max(from_date), to_date)]
-        } else {
-            vec![]
-        }
+    /// Return the number of cached posts for a channel in a date range.
+    pub fn count_cached_posts(&self, channel: &str, from_date: i64, to_date: i64) -> Result<usize> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM posts WHERE channel = ?1 AND date >= ?2 AND date <= ?3",
+            params![channel, from_date, to_date],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
     }
 
     pub fn store_posts(&self, channel: &str, posts: &[Post]) -> Result<()> {
