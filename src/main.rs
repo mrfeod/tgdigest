@@ -328,11 +328,29 @@ async fn favicon(app: &rocket::State<Arc<App>>) -> Option<NamedFile> {
     }
 }
 
-#[get("/")]
+#[get("/?<mode>&<channel>&<top_count>&<editor_choice>&<from_date>&<to_date>&<force>&<force_limit>")]
 async fn index(
+    mode: Option<&str>,
+    channel: Option<&str>,
+    top_count: Option<usize>,
+    editor_choice: Option<i32>,
+    from_date: Option<i64>,
+    to_date: Option<i64>,
+    force: Option<bool>,
+    force_limit: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
-    return digest("ithueti", "ithueti", None, None, None, None, None, None, app).await;
+    digest(
+        mode.unwrap_or("main"),
+        channel.unwrap_or("ithueti"),
+        top_count,
+        editor_choice,
+        from_date,
+        to_date,
+        force,
+        force_limit,
+        app,
+    ).await
 }
 
 #[get("/digest/<mode>/<channel>/<year>/<month>/<week>?<top_count>&<editor_choice>&<force>")]

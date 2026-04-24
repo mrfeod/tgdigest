@@ -46,7 +46,13 @@ impl AppContext {
             .map(|url| url.trim())
             .map(|url| url.trim_end_matches('/').to_string())
             .filter(|url| !url.is_empty())
-            .unwrap_or_else(|| "https://tgd.ithueti.club".to_string())
+            .unwrap_or_else(|| {
+                if cfg!(debug_assertions) {
+                    "http://127.0.0.1:8000".to_string()
+                } else {
+                    panic!("Missing required config parameter: public_base_url")
+                }
+            })
     }
 
     pub fn public_site_name(&self) -> String {
