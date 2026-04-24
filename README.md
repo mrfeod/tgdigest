@@ -24,11 +24,14 @@ If this is your first run and there is no valid `tgdigest.session`, you have to 
   "tg_session": "./tgdigest.session",
   "tg_id": <tg_app_id>,
   "tg_hash": "<tg_app_hash>",
+  "cache_limit_mb": 1024,
+  "public_base_url": "https://digest.example.com",
   "proxy_url": "socks5://host:port"
 }
 ```
 
 - `tg_*`: create your Telegram App credentials https://my.telegram.org/apps.
+- `public_base_url` (optional): public base URL used in digest meta tags such as `canonical`, `og:url`, `og:image`, `twitter:image`.
 - `proxy_url` (optional): SOCKS5 proxy for Telegram connection. Supports `socks5://host:port` or `socks5://user:pass@host:port`. Omit the field to connect directly.
 
 After server start, basic API calls:
@@ -79,6 +82,8 @@ Example `docker-config.json`:
   "tg_session": "/app/state/tgdigest.session",
   "tg_id": <tg_app_id>,
   "tg_hash": "<tg_app_hash>",
+  "cache_limit_mb": 1024,
+  "public_base_url": "https://digest.example.com",
   "proxy_url": "socks5://host:port"
 }
 ```

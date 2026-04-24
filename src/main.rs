@@ -452,6 +452,8 @@ async fn digest(
     let force = force.unwrap_or(false);
     let force_limit = force_limit.unwrap_or(false);
     let fetch_target = compute_fetch_target(force_limit, task.top_count);
+    let base_url = app.ctx.public_base_url();
+    let site_name = app.ctx.public_site_name();
 
     // Detect async template: if template source contains "data_url", it fetches data via JS
     let template_name = format!("{}/digest_template.html", task.mode);
@@ -479,6 +481,8 @@ async fn digest(
         context.insert("channel_name", &task.channel_name);
         context.insert("channel_title", &channel_title);
         context.insert("data_url", &data_url);
+        context.insert("base_url", &base_url);
+        context.insert("site_name", &site_name);
 
         let digest = app.html_renderer.render(&template_name, &context)
             .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
@@ -513,7 +517,13 @@ async fn digest(
             .await
             .unwrap_or_else(|_| task.channel_name.clone());
 
-        let data = workers::digest::create_digest_data(post_top, task.clone(), &channel_title)
+        let data = workers::digest::create_digest_data(
+            post_top,
+            task.clone(),
+            &channel_title,
+            &base_url,
+            &site_name,
+        )
             .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
         let context = data.to_context();
 
@@ -553,6 +563,9 @@ async fn data_endpoint(
         return http_status_err(Status::BadRequest, "Provided date is not allowed");
     }
 
+    let base_url = app.ctx.public_base_url();
+    let site_name = app.ctx.public_site_name();
+
     // 1. If task_id provided, check its progress
     if let Some(ref tid) = task_id {
         // Extract progress state under the lock, then drop it before any .await
@@ -579,7 +592,13 @@ async fn data_endpoint(
                     .await
                     .unwrap_or_else(|_| task.channel_name.clone());
 
-                let data = workers::digest::create_digest_data(post_top, task.clone(), &channel_title)
+                let data = workers::digest::create_digest_data(
+                    post_top,
+                    task.clone(),
+                    &channel_title,
+                    &base_url,
+                    &site_name,
+                )
                     .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
                 let mut json = data.to_json();
@@ -620,7 +639,13 @@ async fn data_endpoint(
             .await
             .unwrap_or_else(|_| task.channel_name.clone());
 
-        let data = workers::digest::create_digest_data(post_top, task.clone(), &channel_title)
+        let data = workers::digest::create_digest_data(
+            post_top,
+            task.clone(),
+            &channel_title,
+            &base_url,
+            &site_name,
+        )
             .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
         let mut json = data.to_json();
@@ -641,7 +666,13 @@ async fn data_endpoint(
         .await
         .unwrap_or_else(|_| task.channel_name.clone());
 
-    let data = workers::digest::create_digest_data(post_top, task, &channel_title)
+    let data = workers::digest::create_digest_data(
+        post_top,
+        task,
+        &channel_title,
+        &base_url,
+        &site_name,
+    )
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
     Ok(Json(data.to_json()))

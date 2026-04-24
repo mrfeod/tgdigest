@@ -11,6 +11,8 @@ pub struct DigestData {
     pub editor_choice_id: i32,
     pub channel_name: String,
     pub channel_title: String,
+    pub base_url: String,
+    pub site_name: String,
 }
 
 impl DigestData {
@@ -20,6 +22,8 @@ impl DigestData {
         context.insert("editor_choice_id", &self.editor_choice_id);
         context.insert("channel_name", &self.channel_name);
         context.insert("channel_title", &self.channel_title);
+        context.insert("base_url", &self.base_url);
+        context.insert("site_name", &self.site_name);
         context
     }
 
@@ -40,11 +44,19 @@ impl DigestData {
             "editor_choice_id": self.editor_choice_id,
             "channel_name": self.channel_name,
             "channel_title": self.channel_title,
+            "base_url": self.base_url,
+            "site_name": self.site_name,
         })
     }
 }
 
-pub fn create_digest_data(post_top: TopPost, task: Task, channel_title: &str) -> Result<DigestData> {
+pub fn create_digest_data(
+    post_top: TopPost,
+    task: Task,
+    channel_title: &str,
+    base_url: &str,
+    site_name: &str,
+) -> Result<DigestData> {
     log::debug!("Creating digest data");
     let get_posts = |action: ActionType| post_top.index(action);
     let blocks = vec![
@@ -82,5 +94,7 @@ pub fn create_digest_data(post_top: TopPost, task: Task, channel_title: &str) ->
         editor_choice_id: task.editor_choice_post_id,
         channel_name: task.channel_name.clone(),
         channel_title: channel_title.to_string(),
+        base_url: base_url.to_string(),
+        site_name: site_name.to_string(),
     })
 }

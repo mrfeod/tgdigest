@@ -11,6 +11,7 @@ pub struct AppContext {
     pub tg_id: i32,
     pub tg_hash: String,
     pub proxy_url: Option<String>,
+    pub public_base_url: Option<String>,
     #[serde(default = "default_cache_limit_mb")]
     pub cache_limit_mb: u64,
 }
@@ -37,5 +38,23 @@ impl AppContext {
         };
         log::info!("Loaded context {:#?}", ctx);
         Ok(ctx)
+    }
+
+    pub fn public_base_url(&self) -> String {
+        self.public_base_url
+            .as_deref()
+            .map(|url| url.trim())
+            .map(|url| url.trim_end_matches('/').to_string())
+            .filter(|url| !url.is_empty())
+            .unwrap_or_else(|| "https://tgd.ithueti.club".to_string())
+    }
+
+    pub fn public_site_name(&self) -> String {
+        let base_url = self.public_base_url();
+        base_url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .trim_end_matches('/')
+            .to_string()
     }
 }
