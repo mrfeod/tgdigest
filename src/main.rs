@@ -807,6 +807,8 @@ async fn video(
     force: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<NamedFile, status::Custom<String>> {
+    let force = force.unwrap_or(false);
+
     let task = Task::default();
     let task = Task {
         command: Commands::Cards {
@@ -839,7 +841,7 @@ async fn video(
 
     // Return cached video if available
     let file = app.ctx.output_dir.join(format!("{}.mp4", task.task_id));
-    if file.exists() {
+    if file.exists() && !force {
         log::trace!("Used cache: {}", file.to_str().unwrap_or("unknown"));
         match NamedFile::open(file).await {
             Ok(file) => return Ok(file),
@@ -850,7 +852,6 @@ async fn video(
     }
 
     let tg_task = task.clone();
-    let force = force.unwrap_or(false);
 
     // Video needs all data — start fetch and wait for it
     let fetch_task_id = start_background_fetch(app.inner(), &tg_task, force, None);
