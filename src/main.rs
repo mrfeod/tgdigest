@@ -107,6 +107,42 @@ fn http_status_err<T>(status: Status, msg: &str) -> std::result::Result<T, statu
     Err(http_status(status, msg))
 }
 
+struct PageMeta {
+    title: String,
+    description: String,
+    url: String,
+    image: String,
+    image_alt: String,
+}
+
+fn channel_page_meta(base_url: &str, channel_name: &str, channel_title: &str) -> PageMeta {
+    PageMeta {
+        title: format!("Лучшие посты телеграм-канала {}", channel_title),
+        description: format!("Лучшие посты телеграм-канала {}", channel_title),
+        url: format!("{}/digest/main/{}", base_url.trim_end_matches('/'), channel_name),
+        image: format!("{}/userpic/{}", base_url.trim_end_matches('/'), channel_name),
+        image_alt: format!("Аватар канала {}", channel_title),
+    }
+}
+
+fn service_page_meta(base_url: &str) -> PageMeta {
+    PageMeta {
+        title: "TGDigest — статистика и видео-дайджесты для телеграм-каналов".to_string(),
+        description: "Смотри лучшие посты и собирай видео-дайджесты для сторис.".to_string(),
+        url: base_url.trim_end_matches('/').to_string(),
+        image: format!("{}/logo.png", base_url.trim_end_matches('/')),
+        image_alt: "TGDigest".to_string(),
+    }
+}
+
+fn insert_page_meta(context: &mut tera::Context, meta: &PageMeta) {
+    context.insert("meta_title", &meta.title);
+    context.insert("meta_description", &meta.description);
+    context.insert("meta_url", &meta.url);
+    context.insert("meta_image", &meta.image);
+    context.insert("meta_image_alt", &meta.image_alt);
+}
+
 fn get_cached_top_posts(app: &App, task: &Task, fetch_target: Option<usize>, force: bool) -> std::result::Result<(TopPost, bool), Box<dyn std::error::Error>> {
     let (mut posts, fetch_plan) = app.cache.get_posts_and_fetch_plan(
         &task.channel_name, task.from_date, task.to_date, fetch_target, force,
@@ -319,9 +355,9 @@ fn get_date_from_week(
     }
 }
 
-#[get("/favicon.ico")]
-async fn favicon(app: &rocket::State<Arc<App>>) -> Option<NamedFile> {
-    let path = app.ctx.input_dir.join("favicon.ico");
+#[get("/<file>")]
+async fn file(app: &rocket::State<Arc<App>>, file: &str) -> Option<NamedFile> {
+    let path = app.ctx.input_dir.join("icon").join(file);
     match path.exists() {
         false => None,
         _ => NamedFile::open(path).await.ok(),
@@ -340,17 +376,65 @@ async fn index(
     force_limit: Option<bool>,
     app: &rocket::State<Arc<App>>,
 ) -> std::result::Result<RawHtml<String>, status::Custom<String>> {
-    digest(
-        mode.unwrap_or("main"),
-        channel.unwrap_or("ithueti"),
-        top_count,
-        editor_choice,
-        from_date,
-        to_date,
-        force,
-        force_limit,
-        app,
-    ).await
+    let mode = mode.unwrap_or("main");
+    let channel = channel.unwrap_or("ithueti");
+
+    if mode != "main" {
+        return digest(
+            mode,
+            channel,
+            top_count,
+            editor_choice,
+            from_date,
+            to_date,
+            force,
+            force_limit,
+            app,
+        ).await;
+    }
+
+    let defaults = Task::default();
+    let task = Task {
+        command: Commands::Digest {},
+        mode: mode.to_string(),
+        channel_name: channel.to_string(),
+        top_count: top_count.unwrap_or(defaults.top_count),
+        editor_choice_post_id: editor_choice.unwrap_or(defaults.editor_choice_post_id),
+        from_date: from_date.unwrap_or(defaults.from_date),
+        to_date: to_date.unwrap_or(defaults.to_date),
+        ..defaults
+    };
+
+    if task.from_date < 0 || task.to_date < 0 {
+        return http_status_err(Status::BadRequest, "Provided date is not allowed");
+    }
+
+    let mut data_url = format!(
+        "/data/{}/{}?from_date={}&to_date={}&top_count={}&editor_choice={}",
+        task.mode, task.channel_name, task.from_date, task.to_date,
+        task.top_count, task.editor_choice_post_id
+    );
+    if force.unwrap_or(false) { data_url.push_str("&force=true"); }
+    if force_limit.unwrap_or(false) { data_url.push_str("&force_limit=true"); }
+
+    let client = tg::TelegramAPI::client();
+    let channel_title = workers::tg::get_channel_title(&client, &task.channel_name)
+        .await
+        .unwrap_or_else(|_| task.channel_name.clone());
+
+    let base_url = app.ctx.public_base_url();
+    let site_name = app.ctx.public_site_name();
+    let mut context = tera::Context::new();
+    context.insert("channel_name", &task.channel_name);
+    context.insert("channel_title", &channel_title);
+    context.insert("data_url", &data_url);
+    context.insert("base_url", &base_url);
+    context.insert("site_name", &site_name);
+    insert_page_meta(&mut context, &service_page_meta(&base_url));
+
+    let digest = app.html_renderer.render("main/digest_template.html", &context)
+        .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+    Ok(content::RawHtml(digest))
 }
 
 #[get("/digest/<mode>/<channel>/<year>/<month>/<week>?<top_count>&<editor_choice>&<force>")]
@@ -501,6 +585,10 @@ async fn digest(
         context.insert("data_url", &data_url);
         context.insert("base_url", &base_url);
         context.insert("site_name", &site_name);
+        insert_page_meta(
+            &mut context,
+            &channel_page_meta(&base_url, &task.channel_name, &channel_title),
+        );
 
         let digest = app.html_renderer.render(&template_name, &context)
             .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
@@ -543,7 +631,11 @@ async fn digest(
             &site_name,
         )
             .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
-        let context = data.to_context();
+        let mut context = data.to_context();
+        insert_page_meta(
+            &mut context,
+            &channel_page_meta(&base_url, &task.channel_name, &channel_title),
+        );
 
         let digest = app.html_renderer.render(&template_name, &context)
             .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
@@ -1568,7 +1660,7 @@ async fn main() {
         .mount(
             "/",
             routes![
-                favicon,
+                file,
                 index,
                 data_endpoint,
                 digest_by_week,
