@@ -5,9 +5,9 @@
 # What's this?
 It's a tool to generate a video from telegram channel's posts.
 
-This is how the result looks like: [https://ithueti.club/tg?video](https://ithueti.club/tg?channel=ithueti&video=1)
+[This is how the result looks like.](https://tgd.ithueti.club/?tab=2)
 
-As additional artifact the tool can create top/digest page: [https://ithueti.club/tg](https://ithueti.club/tg?channel=ithueti)
+As additional artifact the tool can create [statistics](https://tgd.ithueti.club/?tab=0) or [digest](https://tgd.ithueti.club/?tab=1) page.
 
 # Build and Run
 ```sh
