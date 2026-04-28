@@ -920,7 +920,7 @@ async fn video(
     let force = force.unwrap_or(false);
 
     let task = Task::default();
-    let task = Task {
+    let mut task = Task {
         command: Commands::Cards {
             replies,
             reactions,
@@ -935,30 +935,11 @@ async fn video(
         to_date: to_date.unwrap_or(task.to_date),
         task_id: "0".to_string(),
     };
-    let task = match task.to_string() {
-        Ok(task_string) => Task {
-            task_id: hash(task_string),
-            ..task
-        },
-        Err(_) => task,
-    };
 
     log::debug!("Working on task: {}", task.to_string().unwrap());
 
     if task.from_date < 0 || task.to_date < 0 {
         return http_status_err(Status::BadRequest, "Provided date is not allowed");
-    }
-
-    // Return cached video if available
-    let file = app.ctx.output_dir.join(format!("{}.mp4", task.task_id));
-    if file.exists() && !force {
-        log::trace!("Used cache: {}", file.to_str().unwrap_or("unknown"));
-        match NamedFile::open(file).await {
-            Ok(file) => return Ok(file),
-            Err(e) => {
-                log::error!("Failed to open file: {}", e);
-            }
-        }
     }
 
     let tg_task = task.clone();
@@ -988,10 +969,25 @@ async fn video(
         )
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
+    task.task_id = hash(format!("video:{}:{}", task.mode, rendered_html));
+
     log::debug!(
-        "Render file rendered to html: lenght={}",
+        "Render file rendered to html for task {}: lenght={}",
+        task.task_id,
         rendered_html.len()
     );
+
+    // Return cached video if the selected posts rendered to the same video content.
+    let file = app.ctx.output_dir.join(format!("{}.mp4", task.task_id));
+    if file.exists() && !force {
+        log::trace!("Used cache: {}", file.to_str().unwrap_or("unknown"));
+        match NamedFile::open(file).await {
+            Ok(file) => return Ok(file),
+            Err(e) => {
+                log::error!("Failed to open file: {}", e);
+            }
+        }
+    }
 
     let file = render_video(&task, &rendered_html, app.inner()).await?;
 
