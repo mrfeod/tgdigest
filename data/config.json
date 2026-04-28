@@ -1,0 +1,9 @@
+{
+  "input_dir": "/app/data",
+  "output_dir": "/app/output",
+  "tg_session": "/app/state/tgdigest.session",
+  "tg_id": 0,
+  "tg_hash": "",
+  "cache_limit_mb": 1024,
+  "public_base_url": "http://localhost"
+}

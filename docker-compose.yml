@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     image: ${TGDIGEST_IMAGE:-tgdigest:local}
     ports:
-      - "8000:8000"
+      - "${TGDIGEST_BIND:-127.0.0.1}:${TGDIGEST_PORT:-8000}:8000"
     command: ["-c", "/app/config/config.json"]
     stdin_open: true
     tty: true
@@ -13,8 +13,42 @@ services:
       ROCKET_ADDRESS: 0.0.0.0
       ROCKET_PORT: "8000"
     volumes:
-      - ${TGDIGEST_CONFIG_DIR:-./config}:/app/config:ro
+      - ${TGDIGEST_CONFIG_DIR:-./data}:/app/config:ro
       - ${TGDIGEST_DATA_DIR:-./data}:/app/data:ro
       - ${TGDIGEST_OUTPUT_DIR:-./output}:/app/output
       - ${TGDIGEST_STATE_DIR:-./state}:/app/state
     restart: unless-stopped
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    image: ${TGDIGEST_NGINX_IMAGE:-tgdigest-nginx:local}
+    depends_on:
+      - tgdigest
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ${TGDIGEST_NGINX_CONF_DIR:-./nginx/conf.d}:/etc/nginx/conf.d:ro
+      - ${LETSENCRYPT_DIR:-./letsencrypt}:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot:ro
+    restart: unless-stopped
+
+  certbot:
+    image: certbot/certbot:${CERTBOT_TAG:-latest}
+    volumes:
+      - ${LETSENCRYPT_DIR:-./letsencrypt}:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        trap exit TERM
+        while :; do
+          certbot renew --webroot -w /var/www/certbot --quiet
+          sleep 12h & wait $${!}
+        done
+    restart: unless-stopped
+
+volumes:
+  certbot-www:
