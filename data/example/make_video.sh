@@ -27,7 +27,7 @@ for i in "${!cards[@]}"; do
         source="[$i:v]"
     fi
 
-    filters+=("${source}pad=1080:1920:(ow-iw)/2:130:white,fps=30,format=yuv420p,setsar=1,setpts=PTS-STARTPTS[v$i]")
+    filters+=("${source}pad=1080:1920:(ow-iw)/2:150:white,fps=30,format=yuv420p,setsar=1,setpts=PTS-STARTPTS[v$i]")
     video_labels+=("[v$i]")
 done
 

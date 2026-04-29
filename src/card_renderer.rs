@@ -59,7 +59,7 @@ impl CardRenderer {
         for (i, card) in cards.iter().enumerate() {
             let card_path = output_dir.join(format!("card_{:02}.png", i));
             let _ = card
-                .save_screenshot(CaptureScreenshotFormat::Png, &card_path)
+                .save_screenshot(CaptureScreenshotFormat::Webp, &card_path)
                 .await?;
             log::debug!("Card rendered: {}", card_path.to_str().unwrap());
         }
@@ -93,7 +93,6 @@ impl CardRenderer {
 
         if let Err(e) = async {
             page.set_content(html).await?;
-            page.wait_for_navigation().await?;
 
             // Wait for window.__READY flag set by render templates (up to 30s)
             let wait_js = r#"
@@ -101,7 +100,7 @@ impl CardRenderer {
                     if (window.__READY) { resolve(); return; }
                     const check = setInterval(() => {
                         if (window.__READY) { clearInterval(check); resolve(); }
-                    }, 100);
+                    }, 10);
                     setTimeout(() => { clearInterval(check); resolve(); }, 30000);
                 })
             "#;

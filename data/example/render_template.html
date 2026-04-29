@@ -5,8 +5,34 @@
     <meta charset="UTF-8">
     <style>
         div {
-            width: 500px;
-            max-width: 500px;
+            width: 540px;
+            max-width: 540px;
+            height: 960px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        div table {
+            flex-shrink: 0;
+            margin-top: 75px;
+            margin-left: 16px;
+            border-collapse: collapse;
+        }
+
+        div iframe {
+            flex: 1;
+            min-height: 0;
+        }
+
+        div h5 {
+            padding-left: 16px;
+        }
+
+        table th {
+            text-align: left;
+            vertical-align: middle;
+            padding: 0;
         }
 
         body {
