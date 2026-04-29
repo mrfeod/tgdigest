@@ -36,7 +36,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rocket::serde::json::Json;
 
@@ -60,6 +60,11 @@ struct App {
     card_renderer: CardRenderer,
     fetch_progress: std::sync::Mutex<HashMap<String, Arc<FetchProgress>>>,
     tg_semaphore: Arc<tokio::sync::Semaphore>,
+}
+
+struct VideoRenderTimings {
+    images: Duration,
+    ffmpeg: Duration,
 }
 
 impl App {
@@ -942,6 +947,7 @@ async fn video(
         return http_status_err(Status::BadRequest, "Provided date is not allowed");
     }
 
+    let request_started_at = Instant::now();
     let tg_task = task.clone();
 
     // Video needs all data — start fetch and wait for it
@@ -960,7 +966,9 @@ async fn video(
 
     let render_context = workers::cards::create_context(post_top, task.clone())
         .map_err(|e| http_status(Status::BadRequest, e.to_string().as_ref()))?;
+    let request_elapsed = request_started_at.elapsed();
 
+    let html_started_at = Instant::now();
     let rendered_html = app
         .html_renderer
         .render(
@@ -968,6 +976,7 @@ async fn video(
             &render_context,
         )
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+    let html_elapsed = html_started_at.elapsed();
 
     task.task_id = hash(format!("video:{}:{}", task.mode, rendered_html));
 
@@ -989,7 +998,16 @@ async fn video(
         }
     }
 
-    let file = render_video(&task, &rendered_html, app.inner()).await?;
+    let (file, render_timings) = render_video(&task, &rendered_html, app.inner()).await?;
+    log::debug!(
+        "Video task {} timings: request={:.2}s html={:.2}s images={:.2}s ffmpeg={:.2}s total={:.2}s",
+        task.task_id,
+        request_elapsed.as_secs_f64(),
+        html_elapsed.as_secs_f64(),
+        render_timings.images.as_secs_f64(),
+        render_timings.ffmpeg.as_secs_f64(),
+        (request_elapsed + html_elapsed + render_timings.images + render_timings.ffmpeg).as_secs_f64(),
+    );
 
     match NamedFile::open(file).await {
         Ok(file) => Ok(file),
@@ -1001,16 +1019,18 @@ async fn render_video(
     task: &Task,
     rendered_html: &str,
     app: &Arc<App>,
-) -> std::result::Result<PathBuf, status::Custom<String>> {
+) -> std::result::Result<(PathBuf, VideoRenderTimings), status::Custom<String>> {
     let output_dir = app.ctx.output_dir.join(&task.task_id);
     tokio::fs::create_dir_all(&output_dir)
         .await
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
+    let images_started_at = Instant::now();
     app.card_renderer
         .render_html(&output_dir, rendered_html)
         .await
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+    let images_elapsed = images_started_at.elapsed();
 
     let video_maker = app
         .ctx
@@ -1027,11 +1047,13 @@ async fn render_video(
     } else {
         Command::new("bash")
     };
+    let ffmpeg_started_at = Instant::now();
     let output = command
         .current_dir(output_dir.to_str().unwrap())
         .arg(video_maker)
         .output()
         .expect("Failed to execute script");
+    let ffmpeg_elapsed = ffmpeg_started_at.elapsed();
 
     // Print the output of the script
     log::debug!("Status: {}", output.status);
@@ -1048,7 +1070,13 @@ async fn render_video(
         .await
         .map_err(|_| http_status(Status::InternalServerError, "Failed to move final file"))?;
 
-    Ok(new_file)
+    Ok((
+        new_file,
+        VideoRenderTimings {
+            images: images_elapsed,
+            ffmpeg: ffmpeg_elapsed,
+        },
+    ))
 }
 
 #[get("/post/<channel>/<id>")]
