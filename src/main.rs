@@ -50,6 +50,7 @@ pub struct FetchProgress {
     pub cancelled: AtomicBool,
     pub last_poll: AtomicU64,
     pub error: std::sync::Mutex<Option<String>>,
+    pub notify: tokio::sync::Notify,
 }
 
 struct App {
@@ -65,6 +66,11 @@ struct App {
 struct VideoRenderTimings {
     images: Duration,
     ffmpeg: Duration,
+}
+
+struct CachedVideoCandidate {
+    task_id: String,
+    file: PathBuf,
 }
 
 impl App {
@@ -158,6 +164,25 @@ fn get_cached_top_posts(app: &App, task: &Task, fetch_target: Option<usize>, for
     Ok((TopPost::get_top(task.top_count, &mut posts), is_loading))
 }
 
+fn cached_video_candidate(
+    app: &App,
+    task: &Task,
+    post_top: TopPost,
+) -> std::result::Result<CachedVideoCandidate, status::Custom<String>> {
+    let render_context = workers::cards::create_context(post_top, task.clone())
+        .map_err(|e| http_status(Status::BadRequest, e.to_string().as_ref()))?;
+    let rendered_html = app
+        .html_renderer
+        .render(
+            format!("{}/render_template.html", task.mode).as_str(),
+            &render_context,
+        )
+        .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
+    let task_id = hash(format!("video:{}:{}", task.mode, rendered_html));
+    let file = app.ctx.output_dir.join(format!("{}.mp4", task_id));
+    Ok(CachedVideoCandidate { task_id, file })
+}
+
 /// Compute how many additional posts to pull into the cache.
 ///
 /// - Without `force_limit`: `min(top_count, 1000)` — capped at the default.
@@ -185,6 +210,7 @@ fn start_background_fetch(app: &Arc<App>, task: &Task, force: bool, fetch_target
         cancelled: AtomicBool::new(false),
         last_poll: AtomicU64::new(now_secs()),
         error: std::sync::Mutex::new(None),
+        notify: tokio::sync::Notify::new(),
     });
 
     {
@@ -211,6 +237,7 @@ fn start_background_fetch(app: &Arc<App>, task: &Task, force: bool, fetch_target
             *progress.error.lock().unwrap() = Some(e.to_string());
         }
         progress.done.store(true, Ordering::Relaxed);
+        progress.notify.notify_waiters();
     });
 
     // Watchdog: cancel fetch if client stops polling for 10s
@@ -230,6 +257,29 @@ fn start_background_fetch(app: &Arc<App>, task: &Task, force: bool, fetch_target
     task_id
 }
 
+async fn wait_background_fetch(app: &Arc<App>, task_id: &str) {
+    loop {
+        let progress = {
+            let map = app.fetch_progress.lock().unwrap();
+            map.get(task_id).cloned()
+        };
+
+        let Some(progress) = progress else {
+            break;
+        };
+
+        progress.last_poll.store(now_secs(), Ordering::Relaxed);
+        if progress.done.load(Ordering::Relaxed) {
+            break;
+        }
+
+        tokio::select! {
+            _ = progress.notify.notified() => {}
+            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+        }
+    }
+}
+
 async fn background_fetch(
     app: &App,
     task: &Task,
@@ -242,9 +292,10 @@ async fn background_fetch(
     let (_, fetch_plan) = app.cache.get_posts_and_fetch_plan(
         &task.channel_name, task.from_date, task.to_date, fetch_target, force,
     )?;
+    let fetch_limit = fetch_plan.total_limit();
 
     // Update progress limit to the actual total
-    progress.limit.store(fetch_plan.total_limit(), Ordering::Relaxed);
+    progress.limit.store(fetch_limit, Ordering::Relaxed);
 
     for (from, to, range_limit) in &fetch_plan.ranges {
         if progress.cancelled.load(Ordering::Relaxed) {
@@ -950,17 +1001,49 @@ async fn video(
     let request_started_at = Instant::now();
     let tg_task = task.clone();
 
-    // Video needs all data — start fetch and wait for it
-    let fetch_task_id = start_background_fetch(app.inner(), &tg_task, force, None);
-    loop {
-        let is_running = {
-            let map = app.fetch_progress.lock().unwrap();
-            map.get(&fetch_task_id)
-                .is_some_and(|p| !p.done.load(Ordering::Relaxed))
+    // Fast path: if the current cached posts render to an existing video, return it without
+    // waiting for the freshness refresh. This keeps repeated /video hits cheap.
+    if !force {
+        let early_video_file = {
+            match get_cached_top_posts(&app, &tg_task, None, false) {
+                Ok((post_top, _)) => match cached_video_candidate(app.inner(), &task, post_top) {
+                    Ok(candidate) if candidate.file.exists() => Some(candidate),
+                    Ok(_) => None,
+                    Err(e) => {
+                        log::debug!("No early video cache candidate: {:?}", e);
+                        None
+                    }
+                },
+                Err(e) => {
+                    log::debug!("Failed to read cached posts for early video cache: {}", e);
+                    None
+                }
+            }
         };
-        if !is_running { break; }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        if let Some(candidate) = early_video_file {
+            match NamedFile::open(candidate.file).await {
+                Ok(file) => {
+                    log::debug!(
+                        "Used video cache before fetch: task={} request={:.2}s",
+                        candidate.task_id,
+                        request_started_at.elapsed().as_secs_f64(),
+                    );
+                    return Ok(file);
+                }
+                Err(e) => {
+                    log::error!("Failed to open cached video: {}", e);
+                }
+            }
+        }
     }
+
+    // No ready video for the current cached posts. Refresh the post cache and wait, then render
+    // from the refreshed top posts. Passing None keeps the normal video policy: head/edge refresh
+    // without progressive backfill.
+    let fetch_task_id = start_background_fetch(app.inner(), &tg_task, force, None);
+    wait_background_fetch(app.inner(), &fetch_task_id).await;
+
     let (post_top, _) = get_cached_top_posts(&app, &tg_task, None, false)
         .map_err(|e| http_status(Status::InternalServerError, e.to_string().as_ref()))?;
 
@@ -1000,10 +1083,9 @@ async fn video(
 
     let (file, render_timings) = render_video(&task, &rendered_html, app.inner()).await?;
     log::debug!(
-        "Video task {} timings: request={:.2}s html={:.2}s images={:.2}s ffmpeg={:.2}s total={:.2}s",
+        "Video task {} timings: request={:.2}s images={:.2}s ffmpeg={:.2}s total={:.2}s",
         task.task_id,
         request_elapsed.as_secs_f64(),
-        html_elapsed.as_secs_f64(),
         render_timings.images.as_secs_f64(),
         render_timings.ffmpeg.as_secs_f64(),
         (request_elapsed + html_elapsed + render_timings.images + render_timings.ffmpeg).as_secs_f64(),

@@ -1,5 +1,8 @@
-use grammers_client::types::{Downloadable, Media};
 use grammers_client::client::files::DownloadIter;
+use grammers_client::types::{Downloadable, Media};
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 use crate::context::AppContext;
 use crate::post::*;
@@ -7,12 +10,25 @@ use crate::post_data::{self, PostData};
 use crate::task::Task;
 use crate::util::Result;
 
+static CHANNEL_CACHE: Lazy<Mutex<HashMap<String, grammers_client::types::chat::Chat>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 async fn get_channel(
     client: &grammers_client::Client,
     channel_name: &str,
 ) -> Result<grammers_client::types::chat::Chat> {
+    if let Some(channel) = CHANNEL_CACHE.lock().unwrap().get(channel_name).cloned() {
+        return Ok(channel);
+    }
+
     match client.resolve_username(channel_name).await? {
-        Some(channel) => Ok(channel),
+        Some(channel) => {
+            CHANNEL_CACHE
+                .lock()
+                .unwrap()
+                .insert(channel_name.to_string(), channel.clone());
+            Ok(channel)
+        }
         None => Err(format!("Can't find channel t.me/{}", channel_name).into()),
     }
 }

@@ -103,7 +103,9 @@ impl PostCache {
                 channel TEXT NOT NULL PRIMARY KEY,
                 min_fetched_date INTEGER NOT NULL,
                 max_fetched_date INTEGER NOT NULL
-            );",
+            );
+            CREATE INDEX IF NOT EXISTS idx_posts_channel_date_id
+                ON posts(channel, date, id);",
         )?;
 
         // Migrate: if the schema doesn't match (missing columns), recreate the posts table
@@ -127,7 +129,9 @@ impl PostCache {
                     fetched_at INTEGER NOT NULL DEFAULT 0,
                     grouped_id INTEGER,
                     PRIMARY KEY (channel, id)
-                );",
+                );
+                CREATE INDEX IF NOT EXISTS idx_posts_channel_date_id
+                    ON posts(channel, date, id);",
             )?;
         }
 
